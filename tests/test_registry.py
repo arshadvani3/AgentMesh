@@ -5,11 +5,10 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
-from mesh.registry import app
 from mesh.models import AgentManifest, CapabilitySchema
-
+from mesh.registry import app
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -15,7 +15,6 @@ import websockets
 from mesh.models import TaskRequest, TaskStatus
 from sdk.agent import MeshAgent, capability
 
-
 # ---------------------------------------------------------------------------
 # Test agents
 # ---------------------------------------------------------------------------

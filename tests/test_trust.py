@@ -5,9 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from mesh.registry import app
 from mesh.models import AgentManifest, CapabilitySchema
-
+from mesh.registry import app
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,7 +25,7 @@ def _register(client: TestClient, agent_id: str) -> dict:
     m = AgentManifest(
         agent_id=agent_id,
         name=agent_id,
-        endpoint=f"ws://localhost:9999",
+        endpoint="ws://localhost:9999",
         capabilities=[CapabilitySchema(name="cap", description="desc")],
     )
     resp = client.post("/agents/register", json=m.model_dump(mode="json"))

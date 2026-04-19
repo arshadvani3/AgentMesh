@@ -5,9 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from mesh.registry import app, _failure_streaks, _degraded_since
 from mesh.models import AgentManifest, CapabilitySchema
-
+from mesh.registry import _degraded_since, _failure_streaks, app
 
 # ---------------------------------------------------------------------------
 # Helpers

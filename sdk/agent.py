@@ -24,8 +24,9 @@ import asyncio
 import json
 import logging
 import urllib.parse
+from collections.abc import Callable, Coroutine
 from datetime import datetime
-from typing import Any, Callable, Coroutine
+from typing import Any
 
 import httpx
 import websockets
@@ -40,7 +41,6 @@ from mesh.models import (
     TaskRequest,
     TaskResult,
     TaskStatus,
-    TraceEvent,
 )
 
 logger = logging.getLogger("agentmesh.sdk")
@@ -61,7 +61,7 @@ def capability(
     """Decorator to register a method as a mesh capability."""
 
     def decorator(func: Callable[..., Coroutine]):
-        func._mesh_capability = CapabilitySchema(
+        func._mesh_capability = CapabilitySchema(  # type: ignore[attr-defined]
             name=name,
             description=description,
             input_schema=input_schema or {},
@@ -124,8 +124,8 @@ class MeshAgent:
         return self._agent_id or (self._record.manifest.agent_id if self._record else "unregistered")
 
     def _build_manifest(self) -> AgentManifest:
-        caps = [getattr(fn, "_mesh_capability") for fn in self._capabilities.values()]
-        return AgentManifest(
+        caps = [fn._mesh_capability for fn in self._capabilities.values()]  # type: ignore[attr-defined]
+        return AgentManifest(  # type: ignore[call-arg]
             agent_id=self._agent_id or f"agent-{self.name.lower().replace(' ', '-')}",
             name=self.name,
             capabilities=caps,
@@ -192,7 +192,7 @@ class MeshAgent:
 
                 if method == "task.request":
                     request = TaskRequest(**data["params"])
-                    response = await self._handle_task_request(request, websocket)
+                    await self._handle_task_request(request, websocket)
 
         async with websockets.serve(handler, "0.0.0.0", self.ws_port):
             logger.info(f"[{self.name}] Listening for tasks on port {self.ws_port}")
@@ -211,15 +211,16 @@ class MeshAgent:
                 responder_id=self.agent_id,
                 status=TaskStatus.REJECTED,
                 reason=f"Capability '{cap_name}' not available",
+                counter_proposal=None,
             )
             await ws.send(json.dumps({"result": neg.model_dump(mode="json")}))
             return
 
         # Check if at capacity
         if len(self._active_tasks) >= self._max_concurrent_tasks:
-            avg_ms = getattr(handler._mesh_capability, "avg_latency_ms", None) or 5000
+            avg_ms = handler._mesh_capability.avg_latency_ms or 5000  # type: ignore[attr-defined]
             proposed_deadline = request.deadline_ms + int(avg_ms)
-            neg = NegotiationResponse(
+            neg = NegotiationResponse(  # type: ignore[call-arg]
                 task_id=request.task_id,
                 responder_id=self.agent_id,
                 status=TaskStatus.COUNTERED,
@@ -238,8 +239,10 @@ class MeshAgent:
             responder_id=self.agent_id,
             status=TaskStatus.ACCEPTED,
             estimated_latency_ms=int(
-                getattr(handler, "_mesh_capability").avg_latency_ms or 5000
+                handler._mesh_capability.avg_latency_ms or 5000  # type: ignore[attr-defined]
             ),
+            counter_proposal=None,
+            reason=None,
         )
         await ws.send(json.dumps({"result": neg.model_dump(mode="json")}))
         self._active_tasks.add(request.task_id)
@@ -348,7 +351,7 @@ class MeshAgent:
         if parsed.scheme not in ("ws", "wss"):
             raise ValueError(f"Invalid endpoint scheme: {parsed.scheme}")
 
-        request = TaskRequest(
+        request = TaskRequest(  # type: ignore[call-arg]
             capability=capability,
             input_data=input_data,
             requester_id=self.agent_id,
@@ -378,7 +381,7 @@ class MeshAgent:
                 proposed_deadline_ms = proposed.get("deadline_ms", deadline_ms * 2)
                 if proposed_deadline_ms <= deadline_ms * 1.5:
                     # Re-send with proposed deadline
-                    request = TaskRequest(
+                    request = TaskRequest(  # type: ignore[call-arg]
                         capability=capability,
                         input_data=input_data,
                         requester_id=self.agent_id,

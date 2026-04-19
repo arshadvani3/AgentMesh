@@ -16,9 +16,9 @@ import sys
 
 import click
 import httpx
+from rich import box
 from rich.console import Console
 from rich.table import Table
-from rich import box
 
 console = Console()
 

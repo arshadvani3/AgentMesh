@@ -10,6 +10,8 @@ Results are ranked by a composite score:
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -22,7 +24,7 @@ class TaskRouter:
         self._model_name = model_name
 
         # agent_id -> list of (capability_name, description, embedding, cost_per_call_usd)
-        self._index: dict[str, list[tuple[str, str, np.ndarray, float | None]]] = {}
+        self._index: dict[str, list[tuple[str, str, Any, float | None]]] = {}
 
     def _ensure_model(self):
         if self._model is None:
@@ -80,7 +82,7 @@ class TaskRouter:
             best_match = 0.0
             best_cost: float | None = None
 
-            for cap_name, cap_desc, cap_emb, cap_cost in self._index[agent_id]:
+            for cap_name, _cap_desc, cap_emb, cap_cost in self._index[agent_id]:
                 # Cost filter: skip capability if it exceeds budget
                 if (
                     cap_cost is not None

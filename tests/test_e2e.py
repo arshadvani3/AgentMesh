@@ -17,11 +17,10 @@ import pytest
 import pytest_asyncio
 import websockets
 from fastapi.testclient import TestClient
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from mesh.models import (
     AgentManifest,
-    CapabilitySchema,
     DiscoveryQuery,
     NegotiationResponse,
     TaskRequest,

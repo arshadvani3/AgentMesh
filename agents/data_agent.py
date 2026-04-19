@@ -14,8 +14,8 @@ import asyncio
 import logging
 import os
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_groq import ChatGroq
 
 from sdk.agent import MeshAgent, capability
 

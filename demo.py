@@ -21,20 +21,18 @@ import time
 from datetime import datetime
 from typing import Any
 
-import httpx
 import click
+import httpx
 import websockets
 from dotenv import load_dotenv
-
-load_dotenv()
-from rich.columns import Columns
+from rich import box
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
-from rich import box
+
+load_dotenv()
 
 console = Console()
 
@@ -428,7 +426,7 @@ async def run_demo(query: str):
             final_result = result_data
             tokens_used = result_data.get("tokens_used", 0)
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         console.print("[red]Timeout waiting for Research Agent result.[/]")
     except Exception as e:
         console.print(f"[red]Error communicating with Research Agent: {e}[/]")

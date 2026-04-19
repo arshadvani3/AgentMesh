@@ -6,13 +6,13 @@ import json
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 from mesh.models import (
     AgentManifest,
     AgentRecord,
     CapabilitySchema,
     DiscoveryQuery,
-    DiscoveryResult,
     NegotiationResponse,
     TaskRequest,
     TaskResult,
@@ -20,7 +20,6 @@ from mesh.models import (
     TraceEvent,
     TrustUpdate,
 )
-
 
 # ---------------------------------------------------------------------------
 # CapabilitySchema
@@ -142,9 +141,9 @@ class TestTaskRequest:
 
     def test_priority_bounds(self):
         """TaskRequest rejects priority outside 1-5."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TaskRequest(capability="x", requester_id="y", priority=6)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TaskRequest(capability="x", requester_id="y", priority=0)
 
     def test_valid_priorities(self):
@@ -227,12 +226,12 @@ class TestTaskResult:
 class TestTrustUpdate:
     def test_quality_bounds(self):
         """TrustUpdate rejects quality_score outside [0, 1]."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TrustUpdate(
                 agent_id="a", task_id="t", success=True,
                 quality_score=1.5, latency_ms=100, reviewer_id="r",
             )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TrustUpdate(
                 agent_id="a", task_id="t", success=True,
                 quality_score=-0.1, latency_ms=100, reviewer_id="r",
@@ -291,7 +290,7 @@ class TestDiscoveryQuery:
 
     def test_top_k_bounds(self):
         """DiscoveryQuery rejects top_k outside [1, 20]."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoveryQuery(top_k=0)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoveryQuery(top_k=21)

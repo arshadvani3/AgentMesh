@@ -7,7 +7,6 @@ import pytest
 from mesh.models import AgentManifest, AgentRecord, CapabilitySchema, DiscoveryQuery
 from mesh.router import TaskRouter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -35,7 +34,7 @@ def _make_record(
     manifest = AgentManifest(
         agent_id=agent_id,
         name=agent_id,
-        endpoint=f"ws://localhost:9000",
+        endpoint="ws://localhost:9000",
         capabilities=capabilities,
         tags=tags or [],
     )

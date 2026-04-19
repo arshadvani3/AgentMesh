@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
-
 
 # ---------------------------------------------------------------------------
 # Capability & Agent Identity
@@ -73,7 +72,7 @@ class AgentRecord(BaseModel):
 # Task Delegation Protocol
 # ---------------------------------------------------------------------------
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
