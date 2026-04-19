@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agentmesh
+      POSTGRES_USER: mesh
+      POSTGRES_PASSWORD: meshpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./mesh/migrations:/docker-entrypoint-initdb.d
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  registry:
+    build: .
+    command: uvicorn mesh.registry:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://mesh:meshpass@postgres:5432/agentmesh
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: INFO
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - .:/app
+    working_dir: /app
+
+  dashboard:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dashboard:/app
+    environment:
+      - VITE_REGISTRY_URL=http://registry:8000
+
+volumes:
+  pgdata:
