@@ -45,3 +45,6 @@ models/
 .vscode/
 .idea/
 *.swp
+
+# Personal study notes
+STUDY_GUIDE.md
