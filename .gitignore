@@ -46,5 +46,6 @@ models/
 .idea/
 *.swp
 
-# Personal study notes
+# Personal study / application notes
 STUDY_GUIDE.md
+PROJECT_CONTEXT.md
