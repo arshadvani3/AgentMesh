@@ -23,8 +23,8 @@ class TaskRouter:
         self._model: SentenceTransformer | None = None
         self._model_name = model_name
 
-        # agent_id -> list of (capability_name, description, embedding, cost_per_call_usd)
-        self._index: dict[str, list[tuple[str, str, Any, float | None]]] = {}
+        # agent_id -> list of (capability_name, description, embedding, cost_per_call_usd, avg_latency_ms)
+        self._index: dict[str, list[tuple[str, str, Any, float | None, float | None]]] = {}
 
     def _ensure_model(self):
         if self._model is None:
@@ -38,7 +38,7 @@ class TaskRouter:
         for cap in record.manifest.capabilities:
             text = f"{cap.name}: {cap.description}"
             embedding = self._model.encode(text, normalize_embeddings=True)
-            entries.append((cap.name, cap.description, embedding, cap.cost_per_call_usd))
+            entries.append((cap.name, cap.description, embedding, cap.cost_per_call_usd, cap.avg_latency_ms))
 
         self._index[record.manifest.agent_id] = entries
 
@@ -82,12 +82,20 @@ class TaskRouter:
             best_match = 0.0
             best_cost: float | None = None
 
-            for cap_name, _cap_desc, cap_emb, cap_cost in self._index[agent_id]:
+            for cap_name, _cap_desc, cap_emb, cap_cost, cap_latency in self._index[agent_id]:
                 # Cost filter: skip capability if it exceeds budget
                 if (
                     cap_cost is not None
                     and query.max_cost_usd is not None
                     and cap_cost > query.max_cost_usd
+                ):
+                    continue
+
+                # Latency filter: skip capability if tracked latency exceeds max
+                if (
+                    cap_latency is not None
+                    and query.max_latency_ms is not None
+                    and cap_latency > query.max_latency_ms
                 ):
                     continue
 

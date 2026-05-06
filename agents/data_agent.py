@@ -17,6 +17,7 @@ import os
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
+from agents.utils import extract_json
 from sdk.agent import MeshAgent, capability
 
 logger = logging.getLogger("agentmesh.agents.data")
@@ -90,18 +91,18 @@ class DataAgent(MeshAgent):
             "You are a data analyst specializing in statistical analysis of tabular data. "
             "When given a dataset and a query, you provide clear, structured analysis "
             "including summary statistics, key patterns, and actionable insights. "
-            "Format your response as a professional data analysis report."
+            "IMPORTANT: Respond with raw JSON only. No markdown fences, no explanation outside the JSON."
         )
 
         user_prompt = (
             f"Analysis type: {analysis_type}\n\n"
             f"Query: {query}\n\n"
             f"Dataset:\n{data}\n\n"
-            "Please provide:\n"
-            "1. A comprehensive analysis addressing the query\n"
-            "2. Key statistical findings (list 3-5 bullet points)\n"
-            "3. A brief dataset summary\n\n"
-            "Format your response as JSON with keys: 'analysis', 'key_findings' (array), 'data_summary'."
+            "Return a JSON object with exactly these keys:\n"
+            '- "analysis": comprehensive narrative analysis (string)\n'
+            '- "key_findings": list of 3-5 key findings (array of strings)\n'
+            '- "data_summary": one-sentence dataset description (string)\n\n'
+            "Respond with raw JSON only."
         )
 
         messages = [
@@ -113,23 +114,17 @@ class DataAgent(MeshAgent):
         response = await self._llm.ainvoke(messages)
         raw = response.content.strip()
 
-        # Attempt to parse JSON from the response
-        import json
-        import re
-
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            try:
-                parsed = json.loads(json_match.group())
+        try:
+            parsed = extract_json(raw)
+            if isinstance(parsed, dict):
                 return {
                     "analysis": parsed.get("analysis", raw),
                     "key_findings": parsed.get("key_findings", []),
                     "data_summary": parsed.get("data_summary", ""),
                 }
-            except json.JSONDecodeError:
-                pass
+        except ValueError:
+            logger.warning("[DataAgent] Could not parse JSON from LLM response, returning raw text")
 
-        # Fallback: return raw text
         return {
             "analysis": raw,
             "key_findings": [],

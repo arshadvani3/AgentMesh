@@ -11,14 +11,13 @@ Run standalone:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
+from agents.utils import extract_json
 from sdk.agent import MeshAgent, capability
 
 logger = logging.getLogger("agentmesh.agents.code")
@@ -108,18 +107,18 @@ class CodeAgent(MeshAgent):
             "You are an expert software engineer with deep knowledge of AI frameworks, "
             "Python, TypeScript, and modern development patterns. "
             "You produce clean, well-commented, production-quality code examples. "
-            "Always include realistic, runnable code -- not pseudocode."
+            "Always include realistic, runnable code with imports — not pseudocode. "
+            "IMPORTANT: Respond with raw JSON only. No markdown fences, no explanation outside the JSON."
         )
 
         user_prompt = (
             f"Generate {num_examples} code example(s) for:\n"
             f"Query: {query}\n"
             f"Language: {language}{framework_clause}\n\n"
-            "Return a JSON object with:\n"
-            "- 'examples': array of objects, each with 'title', 'code', 'explanation', 'language'\n"
-            "- 'summary': one paragraph describing the overall pattern\n\n"
-            "Make code examples realistic and production-ready. "
-            "Include imports and all necessary context."
+            "Return a JSON object with exactly these keys:\n"
+            '- "examples": array where each item has "title", "code", "explanation", "language"\n'
+            '- "summary": one paragraph describing the overall pattern\n\n'
+            "Respond with raw JSON only."
         )
 
         messages = [
@@ -131,19 +130,16 @@ class CodeAgent(MeshAgent):
         response = await self._llm.ainvoke(messages)
         raw = response.content.strip()
 
-        # Extract JSON block
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            try:
-                parsed = json.loads(json_match.group())
+        try:
+            parsed = extract_json(raw)
+            if isinstance(parsed, dict):
                 return {
                     "examples": parsed.get("examples", []),
                     "summary": parsed.get("summary", ""),
                 }
-            except json.JSONDecodeError:
-                pass
+        except ValueError:
+            logger.warning("[CodeAgent] Could not parse JSON from LLM response, using fallback")
 
-        # Fallback: wrap raw content as a single example
         return {
             "examples": [
                 {

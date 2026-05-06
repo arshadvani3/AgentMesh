@@ -98,6 +98,7 @@ class MeshAgent:
         tags: list[str] | None = None,
         mcp_servers: list[str] | None = None,
         max_concurrent_tasks: int = 3,
+        secret: str | None = None,
     ):
         self.name = name
         self.registry_url = registry_url.rstrip("/")
@@ -111,6 +112,8 @@ class MeshAgent:
         self._running = False
         self._max_concurrent_tasks = max_concurrent_tasks
         self._active_tasks: set[str] = set()
+        self._secret = secret
+        self._token: str | None = None
 
         # Auto-discover @capability decorated methods
         for attr_name in dir(self):
@@ -137,6 +140,12 @@ class MeshAgent:
 
     # --- Lifecycle ---
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Return Authorization header if a token is available."""
+        if self._token:
+            return {"Authorization": f"Bearer {self._token}"}
+        return {}
+
     async def start(self):
         """Register with mesh and start listening."""
         manifest = self._build_manifest()
@@ -150,6 +159,19 @@ class MeshAgent:
             resp.raise_for_status()
             self._record = AgentRecord(**resp.json())
 
+            # Obtain a JWT if a shared secret is configured
+            if self._secret:
+                try:
+                    tok_resp = await client.post(
+                        f"{self.registry_url}/auth/token",
+                        params={"agent_id": self.agent_id, "secret": self._secret},
+                    )
+                    if tok_resp.status_code == 200:
+                        self._token = tok_resp.json()["access_token"]
+                        logger.debug(f"[{self.name}] Obtained auth token")
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Could not obtain auth token: {e}")
+
         logger.info(f"[{self.name}] Registered as {self.agent_id}")
 
         self._running = True
@@ -162,7 +184,10 @@ class MeshAgent:
         """Deregister from the mesh."""
         self._running = False
         async with httpx.AsyncClient() as client:
-            await client.delete(f"{self.registry_url}/agents/{self.agent_id}")
+            await client.delete(
+                f"{self.registry_url}/agents/{self.agent_id}",
+                headers=self._auth_headers(),
+            )
         logger.info(f"[{self.name}] Deregistered")
 
     # --- Heartbeat ---
@@ -268,10 +293,14 @@ class MeshAgent:
                 execution_time_ms=elapsed,
             )
 
-            # Notify registry that the task has ended
+            # Notify registry that the task has ended (include elapsed for latency tracking)
             if self._heartbeat_ws:
                 try:
-                    await self._heartbeat_ws.send(json.dumps({"type": "task_end", "task_id": request.task_id}))
+                    await self._heartbeat_ws.send(json.dumps({
+                        "type": "task_end",
+                        "task_id": request.task_id,
+                        "elapsed_ms": elapsed,
+                    }))
                 except Exception:
                     pass
         except Exception as e:
@@ -429,4 +458,5 @@ class MeshAgent:
                     "success": success,
                     "quality": quality,
                 },
+                headers=self._auth_headers(),
             )

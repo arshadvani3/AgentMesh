@@ -14,10 +14,8 @@ Run standalone:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -25,6 +23,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
+from agents.utils import extract_json
 from sdk.agent import MeshAgent, capability
 
 logger = logging.getLogger("agentmesh.agents.research")
@@ -67,10 +66,11 @@ class ResearchAgent(MeshAgent):
     # ---------------------------------------------------------------------------
 
     async def _plan_node(self, state: ResearchState) -> dict:
-        """Decompose the research query into subtasks.
+        """Decompose the research query into subtasks based on live mesh capabilities.
 
-        Uses Groq to break the query into atomic capability requests that
-        can be delegated to specialized mesh agents.
+        Discovers what agents are currently registered on the mesh, then asks
+        the LLM to decompose the query into subtasks that match available capabilities.
+        This makes the Research Agent truly dynamic — it adapts to whatever is online.
 
         Args:
             state: Current ResearchState with original_query set.
@@ -81,24 +81,44 @@ class ResearchAgent(MeshAgent):
         query = state["original_query"]
         logger.info(f"[Research/plan] Planning subtasks for: {query[:80]}...")
 
+        # Discover live capabilities from the mesh instead of hardcoding them
+        capability_list = ""
+        try:
+            available = await self.discover(top_k=10)
+            if available:
+                cap_lines = []
+                for rec in available:
+                    for cap in rec.manifest.capabilities:
+                        cap_lines.append(f"- '{cap.name}': {cap.description}")
+                capability_list = "\n".join(cap_lines)
+                logger.info(f"[Research/plan] Found {len(cap_lines)} capabilities on mesh")
+        except Exception as e:
+            logger.warning(f"[Research/plan] Could not fetch live capabilities: {e}")
+
+        # Fall back to known defaults if discovery failed
+        if not capability_list:
+            capability_list = (
+                "- 'analyze_csv': statistical analysis and data research\n"
+                "- 'fetch_code': code examples and implementation patterns\n"
+                "- 'write_report': final report synthesis"
+            )
+
         system_prompt = (
-            "You are a research coordinator. Given a complex research query, "
-            "break it down into 2-4 atomic subtasks that can each be handled by "
-            "a specialized agent. Available capability types: "
-            "'analyze_csv' (data/statistics), 'fetch_code' (code examples), "
-            "'write_report' (final synthesis). "
-            "Always include 'write_report' as the last subtask."
+            "You are a research coordinator. Given a complex research query and a list "
+            "of available agent capabilities, break the query into 2-4 atomic subtasks. "
+            "Each subtask must use one of the listed capability names exactly as shown. "
+            "Always include 'write_report' as the last subtask if it is available. "
+            "IMPORTANT: Respond with raw JSON only. No markdown fences, no explanation."
         )
 
         user_prompt = (
             f"Query: {query}\n\n"
+            f"Available capabilities on the mesh:\n{capability_list}\n\n"
             "Return a JSON array of subtasks, each with:\n"
-            "- 'capability': one of [analyze_csv, fetch_code, write_report]\n"
-            "- 'description': what to ask this agent\n"
-            "- 'context': additional context for the agent\n\n"
-            "Example:\n"
-            '[{"capability": "fetch_code", "description": "Get tool-calling examples",'
-            ' "context": "Focus on LangChain"}]'
+            '- "capability": exact capability name from the list above\n'
+            '- "description": specific instruction for that agent\n'
+            '- "context": additional context (can be empty string)\n\n'
+            "Respond with raw JSON only."
         )
 
         response = await self._llm.ainvoke([
@@ -109,12 +129,12 @@ class ResearchAgent(MeshAgent):
         raw = response.content.strip()
         subtasks = []
 
-        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if json_match:
-            try:
-                subtasks = json.loads(json_match.group())
-            except json.JSONDecodeError:
-                logger.warning("[Research/plan] Could not parse subtasks JSON, using defaults")
+        try:
+            parsed = extract_json(raw)
+            if isinstance(parsed, list):
+                subtasks = parsed
+        except ValueError:
+            logger.warning("[Research/plan] Could not parse subtasks JSON, using defaults")
 
         if not subtasks:
             subtasks = [
@@ -164,9 +184,10 @@ class ResearchAgent(MeshAgent):
         return {"discovered_agents": discovered}
 
     async def _delegate_node(self, state: ResearchState) -> dict:
-        """Delegate each subtask (except write_report) to the discovered agent.
+        """Delegate subtasks (except write_report) to discovered agents in parallel.
 
-        write_report runs in synthesize with the full context of other results.
+        Uses asyncio.gather() to fan out all subtasks concurrently, capped at
+        3 in-flight tasks to avoid overwhelming agents.
 
         Args:
             state: Current ResearchState with discovered_agents set.
@@ -178,19 +199,23 @@ class ResearchAgent(MeshAgent):
         errors: list[str] = []
         discovered = state["discovered_agents"]
 
+        # Build list of (cap, subtask, target) to delegate — skip write_report
+        work = []
         for subtask in state["subtasks"]:
             cap = subtask["capability"]
-
             if cap == "write_report":
                 continue
-
             if cap not in discovered:
                 logger.info(f"[Research/delegate] Skipping '{cap}' -- no agent available")
                 continue
+            work.append((cap, subtask, discovered[cap]))
 
-            target = discovered[cap]
-            logger.info(f"[Research/delegate] Delegating '{cap}' to {target.manifest.name}")
+        if not work:
+            return {"delegation_results": results, "errors": errors}
 
+        logger.info(f"[Research/delegate] Delegating {len(work)} subtasks in parallel")
+
+        async def _run_one(cap: str, subtask: dict, target: Any):
             try:
                 result = await self.delegate(
                     capability=cap,
@@ -200,14 +225,23 @@ class ResearchAgent(MeshAgent):
                     },
                     target=target,
                 )
-                results[cap] = result.output
-                logger.info(
-                    f"[Research/delegate] '{cap}' completed in {result.execution_time_ms}ms"
-                )
+                logger.info(f"[Research/delegate] '{cap}' completed in {result.execution_time_ms}ms")
+                return cap, result.output, None
             except Exception as e:
                 err = f"Delegation to '{cap}' failed: {e}"
-                errors.append(err)
                 logger.warning(f"[Research/delegate] {err}")
+                return cap, None, err
+
+        # Cap at 3 concurrent delegations to avoid overwhelming agents
+        max_parallel = 3
+        for i in range(0, len(work), max_parallel):
+            batch = work[i:i + max_parallel]
+            batch_results = await asyncio.gather(*[_run_one(c, s, t) for c, s, t in batch])
+            for cap, output, err in batch_results:
+                if err:
+                    errors.append(err)
+                else:
+                    results[cap] = output
 
         return {"delegation_results": results, "errors": errors}
 

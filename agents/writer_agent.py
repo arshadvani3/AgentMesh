@@ -11,14 +11,13 @@ Run standalone:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
+from agents.utils import extract_json
 from sdk.agent import MeshAgent, capability
 
 logger = logging.getLogger("agentmesh.agents.writer")
@@ -95,31 +94,34 @@ class WriterAgent(MeshAgent):
         audience = input_data.get("audience", "technical")
 
         # Build context from gathered data
+        # Keys match what ResearchAgent stores: "analyze_csv", "fetch_code"
+        # Also accept legacy keys "data_analysis", "code_examples" for compatibility
         context_sections = []
-        if "data_analysis" in data:
-            da = data["data_analysis"]
-            if isinstance(da, dict):
+        da_raw = data.get("analyze_csv") or data.get("data_analysis")
+        if da_raw:
+            if isinstance(da_raw, dict):
                 context_sections.append(
-                    f"DATA ANALYSIS:\n{da.get('analysis', str(da))}"
+                    f"DATA ANALYSIS:\n{da_raw.get('analysis', str(da_raw))}"
                 )
             else:
-                context_sections.append(f"DATA ANALYSIS:\n{da}")
+                context_sections.append(f"DATA ANALYSIS:\n{da_raw}")
 
-        if "code_examples" in data:
-            ce = data["code_examples"]
-            if isinstance(ce, dict):
-                examples = ce.get("examples", [])
+        ce_raw = data.get("fetch_code") or data.get("code_examples")
+        if ce_raw:
+            if isinstance(ce_raw, dict):
+                examples = ce_raw.get("examples", [])
                 code_text = "\n\n".join(
                     f"### {ex.get('title', 'Example')}\n```{ex.get('language','')}\n{ex.get('code','')}\n```\n{ex.get('explanation','')}"
                     for ex in examples
                 )
                 context_sections.append(f"CODE EXAMPLES:\n{code_text}")
             else:
-                context_sections.append(f"CODE EXAMPLES:\n{ce}")
+                context_sections.append(f"CODE EXAMPLES:\n{ce_raw}")
 
         # Add any other data sources
+        _handled = {"analyze_csv", "fetch_code", "data_analysis", "code_examples"}
         for key, value in data.items():
-            if key not in ("data_analysis", "code_examples"):
+            if key not in _handled:
                 context_sections.append(f"{key.upper().replace('_', ' ')}:\n{value}")
 
         context_text = "\n\n---\n\n".join(context_sections) if context_sections else "No external data provided."
@@ -128,7 +130,8 @@ class WriterAgent(MeshAgent):
             "You are a senior technical writer with expertise in AI/ML, software engineering, "
             "and business analysis. You produce clear, well-structured reports that are "
             "accurate, insightful, and engaging. You always include an executive summary, "
-            "organized sections with proper markdown headers, and concrete conclusions."
+            "organized sections with proper markdown headers, and concrete conclusions. "
+            "IMPORTANT: Respond with raw JSON only. No markdown fences, no explanation outside the JSON."
         )
 
         user_prompt = (
@@ -138,15 +141,16 @@ class WriterAgent(MeshAgent):
             f"Use the following gathered data as source material:\n\n"
             f"{context_text}\n\n"
             "Requirements:\n"
-            "- Use proper markdown with ## headers\n"
+            "- Use proper markdown with ## headers inside the report string\n"
             "- Start with an Executive Summary\n"
             "- Include all relevant data from the provided sources\n"
             "- End with Conclusions and/or Recommendations\n"
-            "- Be comprehensive but concise -- aim for 800-1200 words\n"
+            "- Be comprehensive but concise — aim for 800-1200 words\n"
             "- If code examples are provided, include them with proper fencing\n\n"
-            "Return a JSON object with:\n"
-            "- 'report': the full markdown report as a string\n"
-            "- 'sections': array of section header names\n"
+            "Return a JSON object with exactly these keys:\n"
+            '- "report": the full markdown report as a string\n'
+            '- "sections": array of section header names\n\n'
+            "Respond with raw JSON only."
         )
 
         messages = [
@@ -158,11 +162,9 @@ class WriterAgent(MeshAgent):
         response = await self._llm.ainvoke(messages)
         raw = response.content.strip()
 
-        # Extract JSON block
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            try:
-                parsed = json.loads(json_match.group())
+        try:
+            parsed = extract_json(raw)
+            if isinstance(parsed, dict):
                 report_text = parsed.get("report", raw)
                 sections = parsed.get("sections", [])
                 return {
@@ -170,10 +172,9 @@ class WriterAgent(MeshAgent):
                     "word_count": len(report_text.split()),
                     "sections": sections,
                 }
-            except json.JSONDecodeError:
-                pass
+        except ValueError:
+            logger.warning("[WriterAgent] Could not parse JSON from LLM response, using raw content")
 
-        # Fallback: the raw content is the report
         return {
             "report": raw,
             "word_count": len(raw.split()),

@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
 
 from .db import get_db
 from .models import (
@@ -29,6 +33,16 @@ from .models import (
 )
 from .router import TaskRouter
 
+# ---------------------------------------------------------------------------
+# JWT configuration
+# ---------------------------------------------------------------------------
+
+_JWT_SECRET = os.environ.get("AGENT_SECRET", "agentmesh-dev-secret-change-in-prod")
+_JWT_ALGORITHM = "HS256"
+_JWT_EXPIRE_HOURS = 24
+
+_http_bearer = HTTPBearer(auto_error=False)
+
 logger = logging.getLogger("agentmesh.registry")
 
 # WebSocket connections keyed by agent_id (always in-memory -- not persisted)
@@ -39,8 +53,10 @@ _dashboard_ws: list[WebSocket] = []
 _active_task_counts: dict[str, int] = {}
 _failure_streaks: dict[str, int] = {}
 _degraded_since: dict[str, datetime] = {}
+_latency_samples: dict[str, deque] = {}  # agent_id -> deque of last 20 elapsed_ms values
 CIRCUIT_OPEN_THRESHOLD = 3
 CIRCUIT_COOLDOWN_SECONDS = 60
+LATENCY_WINDOW = 20  # number of samples to keep in rolling average
 
 HEARTBEAT_TIMEOUT = timedelta(seconds=30)
 HEALTH_CHECK_INTERVAL = 10  # seconds
@@ -107,6 +123,65 @@ router_engine = TaskRouter()
 
 
 # ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def _create_token(agent_id: str) -> str:
+    """Issue a signed JWT for an agent."""
+    payload = {
+        "sub": agent_id,
+        "exp": datetime.utcnow() + timedelta(hours=_JWT_EXPIRE_HOURS),
+    }
+    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
+
+
+async def _verify_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_http_bearer),  # noqa: B008
+) -> str:
+    """FastAPI dependency: validate Bearer token, return agent_id.
+
+    Returns "anonymous" when AGENT_SECRET is not set (dev mode without auth).
+    Raises HTTP 401 when auth is enabled but token is missing or invalid.
+    """
+    if _JWT_SECRET == "agentmesh-dev-secret-change-in-prod":
+        return "anonymous"  # auth disabled in dev
+    if not credentials:
+        raise HTTPException(401, "Missing Authorization header")
+    try:
+        payload = jwt.decode(credentials.credentials, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+        return payload["sub"]
+    except JWTError as exc:
+        raise HTTPException(401, "Invalid or expired token") from exc
+
+
+@app.post("/auth/token")
+async def get_token(agent_id: str, secret: str) -> dict:
+    """Issue a JWT for an agent.
+
+    The agent must supply its agent_id and the shared AGENT_SECRET configured
+    on the registry. Returns a bearer token valid for 24 hours.
+
+    Args:
+        agent_id: The agent requesting a token.
+        secret: The pre-shared secret (must match AGENT_SECRET env var).
+
+    Returns:
+        Dict with 'access_token' and 'token_type'.
+
+    Raises:
+        HTTPException 401: If secret is incorrect.
+        HTTPException 404: If agent is not registered.
+    """
+    if secret != _JWT_SECRET:
+        raise HTTPException(401, "Invalid secret")
+    db = await get_db()
+    if not await db.get_agent(agent_id):
+        raise HTTPException(404, f"Agent {agent_id} not found")
+    token = _create_token(agent_id)
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -139,7 +214,7 @@ async def register_agent(manifest: AgentManifest) -> AgentRecord:
 
 
 @app.delete("/agents/{agent_id}")
-async def deregister_agent(agent_id: str) -> dict:
+async def deregister_agent(agent_id: str, _: str = Depends(_verify_token)) -> dict:
     """Remove an agent from the mesh.
 
     Args:
@@ -259,6 +334,18 @@ async def heartbeat(websocket: WebSocket, agent_id: str):
 
             elif data.get("type") == "task_end":
                 _active_task_counts[agent_id] = max(0, _active_task_counts.get(agent_id, 0) - 1)
+                elapsed_ms = data.get("elapsed_ms")
+                if elapsed_ms is not None:
+                    if agent_id not in _latency_samples:
+                        _latency_samples[agent_id] = deque(maxlen=LATENCY_WINDOW)
+                    _latency_samples[agent_id].append(float(elapsed_ms))
+                    avg = sum(_latency_samples[agent_id]) / len(_latency_samples[agent_id])
+                    # Update avg_latency_ms on all capabilities for this agent
+                    rec = await db.get_agent(agent_id)
+                    if rec:
+                        for cap in rec.manifest.capabilities:
+                            cap.avg_latency_ms = round(avg, 1)
+                        await db.save_agent(rec)
 
             elif data.get("type") == "trace":
                 event = TraceEvent(**data["payload"])
@@ -326,7 +413,7 @@ async def _broadcast_trace(event: TraceEvent):
 # ---------------------------------------------------------------------------
 
 @app.post("/trust/update")
-async def update_trust(agent_id: str, success: bool, quality: float = 0.5):
+async def update_trust(agent_id: str, success: bool, quality: float = 0.5, _: str = Depends(_verify_token)):
     """Update an agent's trust score after a task completes.
 
     Uses an ELO-inspired update rule: new = old + k * (actual - expected)
