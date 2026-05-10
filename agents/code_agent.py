@@ -1,8 +1,14 @@
-"""Code Agent -- retrieves and generates relevant code examples via LLM reasoning.
+"""Code Agent -- generates and optionally executes code examples via LLM + sandbox.
 
-Registers on the mesh with the 'fetch_code' capability. For the MVP the agent
-uses Groq (Llama 3.3 70B) to generate high-quality code examples based on
-natural-language queries. Future: connect to GitHub via MCP for real repo search.
+Registers on the mesh with the 'fetch_code' capability.
+
+When input_data contains "execute": true, each generated snippet is run inside
+an isolated subprocess with a 5-second hard timeout. Real stdout/stderr is
+captured and returned alongside the code — so callers see whether the code
+actually works, not just what it looks like.
+
+Execution is opt-in (default False) so the agent is safe to use in contexts
+where running arbitrary code is undesirable.
 
 Run standalone:
     python -m agents.code_agent
@@ -10,9 +16,12 @@ Run standalone:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
 import os
+import subprocess
+import sys
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
@@ -22,12 +31,79 @@ from sdk.agent import MeshAgent, capability
 
 logger = logging.getLogger("agentmesh.agents.code")
 
+_EXEC_TIMEOUT_SECONDS = 5
+
+
+# ---------------------------------------------------------------------------
+# Sandbox execution helper
+# ---------------------------------------------------------------------------
+
+def _run_in_sandbox(code: str) -> dict:
+    """Execute a Python snippet in an isolated subprocess.
+
+    Uses subprocess (not exec/eval) so:
+    - No shared state with the agent process
+    - Real stdout/stderr captured cleanly
+    - Hard timeout via subprocess.run timeout arg
+
+    Args:
+        code: Python source to execute.
+
+    Returns:
+        Dict with stdout, stderr, exit_code, executed (bool), error (str | None).
+    """
+    # Syntax check first — fast fail, no subprocess overhead
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        return {
+            "executed": False,
+            "stdout": "",
+            "stderr": f"SyntaxError: {e}",
+            "exit_code": 1,
+            "error": f"Syntax error prevented execution: {e}",
+        }
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=_EXEC_TIMEOUT_SECONDS,
+        )
+        return {
+            "executed": True,
+            "stdout": result.stdout[:2000],   # cap at 2k chars — prevent huge outputs
+            "stderr": result.stderr[:1000],
+            "exit_code": result.returncode,
+            "error": None,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "executed": False,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": -1,
+            "error": f"Execution timed out after {_EXEC_TIMEOUT_SECONDS}s",
+        }
+    except Exception as e:
+        return {
+            "executed": False,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": -1,
+            "error": str(e),
+        }
+
+
+# ---------------------------------------------------------------------------
+# CodeAgent
+# ---------------------------------------------------------------------------
 
 class CodeAgent(MeshAgent):
-    """Generates and retrieves code examples for programming queries."""
+    """Generates annotated code examples, optionally running them in a sandbox."""
 
     def __init__(self, **kwargs):
-        """Initialize CodeAgent with a Groq LLM backend."""
         super().__init__(**kwargs)
         self._llm = ChatGroq(
             model="llama-3.3-70b-versatile",
@@ -38,29 +114,22 @@ class CodeAgent(MeshAgent):
     @capability(
         name="fetch_code",
         description=(
-            "Fetches or generates relevant code examples and patterns for a given query. "
-            "Handles questions about code architecture, library usage, tool calling, "
-            "framework comparisons, and best practices. "
-            "Returns annotated code snippets with explanations."
+            "Generates relevant code examples for a given query and optionally executes "
+            "them in a sandboxed subprocess, returning real stdout/stderr. "
+            "Set execute=true in input to enable sandbox execution. "
+            "Handles AI frameworks, Python patterns, library usage, and best practices."
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "What code patterns or examples to find",
-                },
-                "language": {
-                    "type": "string",
-                    "description": "Programming language (default: python)",
-                },
-                "framework": {
-                    "type": "string",
-                    "description": "Specific framework or library to target",
-                },
-                "num_examples": {
-                    "type": "integer",
-                    "description": "Number of examples to return (default: 2)",
+                "query": {"type": "string", "description": "What code patterns or examples to generate"},
+                "language": {"type": "string", "description": "Programming language (default: python)"},
+                "framework": {"type": "string", "description": "Specific framework or library to target"},
+                "num_examples": {"type": "integer", "description": "Number of examples to return (default: 2)"},
+                "execute": {
+                    "type": "boolean",
+                    "description": "Run each example in a sandboxed subprocess and return real output",
+                    "default": False,
                 },
             },
             "required": ["query"],
@@ -77,6 +146,8 @@ class CodeAgent(MeshAgent):
                             "code": {"type": "string"},
                             "explanation": {"type": "string"},
                             "language": {"type": "string"},
+                            "executed": {"type": "boolean"},
+                            "execution_result": {"type": "object"},
                         },
                     },
                 },
@@ -87,27 +158,28 @@ class CodeAgent(MeshAgent):
         cost_per_call_usd=0.003,
     )
     async def fetch_code(self, input_data: dict) -> dict:
-        """Generate annotated code examples for the given query.
+        """Generate code examples and optionally execute them.
 
         Args:
-            input_data: Dict with keys: query (required), language (optional),
-                        framework (optional), num_examples (optional).
+            input_data: Dict with query (required), language, framework,
+                        num_examples, execute (all optional).
 
         Returns:
-            Dict with examples list (title, code, explanation, language) and summary.
+            Dict with examples (title, code, explanation, language,
+            executed, execution_result) and summary.
         """
         query = input_data.get("query", "")
         language = input_data.get("language", "python")
         framework = input_data.get("framework", "")
         num_examples = input_data.get("num_examples", 2)
+        should_execute = input_data.get("execute", False) and language.lower() == "python"
 
         framework_clause = f" using {framework}" if framework else ""
 
         system_prompt = (
-            "You are an expert software engineer with deep knowledge of AI frameworks, "
-            "Python, TypeScript, and modern development patterns. "
-            "You produce clean, well-commented, production-quality code examples. "
-            "Always include realistic, runnable code with imports — not pseudocode. "
+            "You are an expert software engineer. "
+            "Produce clean, well-commented, production-quality code examples with realistic imports. "
+            "Each example must be self-contained and runnable. "
             "IMPORTANT: Respond with raw JSON only. No markdown fences, no explanation outside the JSON."
         )
 
@@ -121,36 +193,56 @@ class CodeAgent(MeshAgent):
             "Respond with raw JSON only."
         )
 
-        messages = [
+        logger.info(f"[CodeAgent] Generating code for: {query[:80]}...")
+        response = await self._llm.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
-        ]
-
-        logger.info(f"[CodeAgent] Fetching code for: {query[:80]}...")
-        response = await self._llm.ainvoke(messages)
+        ])
         raw = response.content.strip()
+
+        examples = []
+        summary = ""
 
         try:
             parsed = extract_json(raw)
             if isinstance(parsed, dict):
-                return {
-                    "examples": parsed.get("examples", []),
-                    "summary": parsed.get("summary", ""),
-                }
+                examples = parsed.get("examples", [])
+                summary = parsed.get("summary", "")
         except ValueError:
             logger.warning("[CodeAgent] Could not parse JSON from LLM response, using fallback")
+            examples = [{"title": f"Example: {query[:60]}", "code": raw,
+                         "explanation": "Generated by CodeAgent", "language": language}]
+            summary = f"Code examples for: {query}"
 
-        return {
-            "examples": [
-                {
-                    "title": f"Example: {query[:60]}",
-                    "code": raw,
-                    "explanation": "Generated by CodeAgent",
-                    "language": language,
-                }
-            ],
-            "summary": f"Code examples for: {query}",
-        }
+        # Optionally execute each example in a sandbox
+        if should_execute:
+            loop = asyncio.get_event_loop()
+            for ex in examples:
+                code = ex.get("code", "")
+                if not code:
+                    ex["executed"] = False
+                    ex["execution_result"] = {}
+                    continue
+                # Run in executor so we don't block the async event loop
+                exec_result = await loop.run_in_executor(None, _run_in_sandbox, code)
+                ex["executed"] = exec_result.pop("executed")
+                ex["execution_result"] = exec_result
+                if ex["executed"]:
+                    logger.info(
+                        f"[CodeAgent] Executed '{ex.get('title','')}': "
+                        f"exit={exec_result.get('exit_code')}"
+                    )
+                else:
+                    logger.info(
+                        f"[CodeAgent] Skipped execution for '{ex.get('title','')}': "
+                        f"{exec_result.get('error')}"
+                    )
+        else:
+            for ex in examples:
+                ex.setdefault("executed", False)
+                ex.setdefault("execution_result", {})
+
+        return {"examples": examples, "summary": summary}
 
 
 # ---------------------------------------------------------------------------
@@ -158,12 +250,11 @@ class CodeAgent(MeshAgent):
 # ---------------------------------------------------------------------------
 
 async def main():
-    """Start the CodeAgent and register it on the mesh."""
     agent = CodeAgent(
         name="Code Agent",
         registry_url=os.environ.get("REGISTRY_URL", "http://localhost:8000"),
         ws_port=9003,
-        tags=["code", "github", "programming"],
+        tags=["code", "github", "programming", "execution"],
     )
     await agent.start()
 

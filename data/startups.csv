@@ -1,0 +1,101 @@
+company,sector,amount_usd,year,country,stage
+OpenAI,AI,11000000000,2023,USA,Series E
+Anthropic,AI,7300000000,2023,USA,Series C
+Mistral AI,AI,1050000000,2023,France,Series B
+Cohere,AI,270000000,2023,Canada,Series C
+Hugging Face,AI,235000000,2023,USA,Series D
+Stability AI,AI,101000000,2022,UK,Series A
+Inflection AI,AI,1300000000,2023,USA,Series B
+Adept AI,AI,350000000,2023,USA,Series B
+Character AI,AI,150000000,2023,USA,Series A
+Together AI,AI,102000000,2023,USA,Series A
+Stripe,Fintech,6500000000,2023,USA,Series I
+Checkout.com,Fintech,1000000000,2022,UK,Series D
+Brex,Fintech,300000000,2022,USA,Series D
+Ramp,Fintech,750000000,2022,USA,Series D
+Plaid,Fintech,425000000,2021,USA,Series D
+Chime,Fintech,750000000,2021,USA,Series G
+Robinhood,Fintech,3400000000,2021,USA,Series J
+Revolut,Fintech,800000000,2021,UK,Series E
+Nubank,Fintech,1150000000,2021,Brazil,Series J
+Marqeta,Fintech,528000000,2021,USA,IPO
+Databricks,Data,500000000,2023,USA,Series I
+Snowflake,Data,3400000000,2020,USA,IPO
+dbt Labs,Data,222000000,2022,USA,Series D
+Fivetran,Data,565000000,2021,USA,Series D
+Monte Carlo,Data,135000000,2022,USA,Series C
+Airbyte,Data,150000000,2022,USA,Series B
+Starburst,Data,250000000,2022,USA,Series D
+Hex,Data,52000000,2022,USA,Series B
+Materialize,Data,60000000,2022,USA,Series C
+Imply,Data,100000000,2022,USA,Series C
+Wiz,Cybersecurity,300000000,2023,USA,Series D
+Lacework,Cybersecurity,1300000000,2022,USA,Series D
+Orca Security,Cybersecurity,550000000,2022,Israel,Series C
+Snyk,Cybersecurity,530000000,2022,UK,Series F
+Axonius,Cybersecurity,200000000,2022,USA,Series E
+Cybereason,Cybersecurity,325000000,2021,USA,Series F
+Illumio,Cybersecurity,225000000,2021,USA,Series F
+Abnormal Security,Cybersecurity,210000000,2022,USA,Series C
+Securonix,Cybersecurity,1000000000,2021,USA,Series E
+SentinelOne,Cybersecurity,267000000,2021,USA,IPO
+Stripe Climate,Climatetech,8000000,2021,USA,Seed
+Form Energy,Climatetech,450000000,2022,USA,Series E
+Commonwealth Fusion,Climatetech,1800000000,2022,USA,Series B
+H2 Green Steel,Climatetech,190000000,2022,Sweden,Series B
+Twelve,Climatetech,130000000,2022,USA,Series B
+Redwood Materials,Climatetech,775000000,2022,USA,Series C
+Electric Hydrogen,Climatetech,198000000,2023,USA,Series B
+Sunstone Credit,Climatetech,30000000,2022,USA,Series A
+Arcadia,Climatetech,200000000,2022,USA,Series D
+Palmetto,Climatetech,375000000,2022,USA,Series C
+Vercel,DevTools,150000000,2022,USA,Series D
+Hashicorp,DevTools,322000000,2021,USA,IPO
+GitLab,DevTools,268000000,2019,USA,IPO
+Postman,DevTools,225000000,2021,USA,Series D
+Grafana Labs,DevTools,240000000,2022,USA,Series D
+CircleCI,DevTools,100000000,2021,USA,Series F
+LaunchDarkly,DevTools,200000000,2021,USA,Series D
+Incident.io,DevTools,62000000,2023,UK,Series B
+Sentry,DevTools,60000000,2021,USA,Series E
+Cortex,DevTools,35000000,2022,USA,Series B
+Figma,Design,200000000,2021,USA,Series E
+Canva,Design,700000000,2021,Australia,Series F
+Framer,Design,27000000,2022,Netherlands,Series B
+Maze,Design,40000000,2022,USA,Series B
+Luma AI,Design,20000000,2022,USA,Series A
+Spline,Design,5000000,2022,Chile,Seed
+Uizard,Design,15000000,2022,Denmark,Series A
+Abstract,Design,30000000,2019,USA,Series B
+Overflow,Design,3000000,2021,Cyprus,Seed
+Pitch,Design,85000000,2021,Germany,Series B
+Moderna,Biotech,1300000000,2020,USA,Public
+BioNTech,Biotech,2050000000,2020,Germany,Public
+Insitro,Biotech,400000000,2021,USA,Series C
+Recursion,Biotech,436000000,2021,USA,IPO
+Insilico Medicine,Biotech,95000000,2023,Hong Kong,Series D
+Valo Health,Biotech,300000000,2022,USA,Series D
+Xilio Therapeutics,Biotech,125000000,2021,USA,IPO
+BigHat Biosciences,Biotech,75000000,2022,USA,Series B
+Veritas Genetics,Biotech,8000000,2021,USA,Series B
+Deep Genomics,Biotech,180000000,2021,Canada,Series C
+Delivery Hero,Logistics,1200000000,2021,Germany,Public
+Getir,Logistics,768000000,2021,Turkey,Series D
+Gopuff,Logistics,1150000000,2021,USA,Series F
+Lalamove,Logistics,1500000000,2021,Hong Kong,Series F
+Flexport,Logistics,900000000,2022,USA,Series F
+Samsara,Logistics,805000000,2021,USA,IPO
+project44,Logistics,420000000,2022,USA,Series F
+FourKites,Logistics,100000000,2022,USA,Series D
+Stord,Logistics,90000000,2022,USA,Series D
+Onfleet,Logistics,14000000,2021,USA,Series B
+Scale AI,AI,325000000,2021,USA,Series E
+Weights & Biases,AI,135000000,2021,USA,Series C
+Pinecone,AI,100000000,2023,USA,Series B
+Weaviate,AI,50000000,2023,Netherlands,Series B
+LangChain,AI,25000000,2023,USA,Series A
+Qdrant,AI,28000000,2023,Germany,Series A
+Replicate,AI,40000000,2023,USA,Series B
+Modal Labs,AI,16000000,2022,USA,Series A
+Lightning AI,AI,40000000,2022,USA,Series B
+Anyscale,AI,99000000,2022,USA,Series C

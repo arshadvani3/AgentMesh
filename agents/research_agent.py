@@ -37,9 +37,10 @@ class ResearchState(TypedDict):
     """Shared state flowing through the LangGraph research pipeline."""
 
     original_query: str
-    subtasks: list[dict[str, str]]       # [{capability, description, context}]
-    discovered_agents: dict[str, Any]    # capability -> AgentRecord
-    delegation_results: dict[str, Any]   # capability -> TaskResult.output
+    session_id: str                        # task_id used as memory namespace
+    subtasks: list[dict[str, str]]         # [{capability, description, context}]
+    discovered_agents: dict[str, Any]      # capability -> AgentRecord
+    delegation_results: dict[str, Any]     # capability -> TaskResult.output
     final_report: str
     errors: list[str]
 
@@ -143,6 +144,16 @@ class ResearchAgent(MeshAgent):
             ]
 
         logger.info(f"[Research/plan] Created {len(subtasks)} subtasks")
+
+        # Persist plan to memory so a retry can skip re-planning
+        try:
+            await self._memory.set(state["session_id"], "plan", {
+                "query": query,
+                "subtasks": subtasks,
+            })
+        except Exception as e:
+            logger.debug(f"[Research/plan] Memory write skipped: {e}")
+
         return {"subtasks": subtasks}
 
     async def _discover_node(self, state: ResearchState) -> dict:
@@ -234,6 +245,7 @@ class ResearchAgent(MeshAgent):
 
         # Cap at 3 concurrent delegations to avoid overwhelming agents
         max_parallel = 3
+        session_id = state["session_id"]
         for i in range(0, len(work), max_parallel):
             batch = work[i:i + max_parallel]
             batch_results = await asyncio.gather(*[_run_one(c, s, t) for c, s, t in batch])
@@ -242,6 +254,11 @@ class ResearchAgent(MeshAgent):
                     errors.append(err)
                 else:
                     results[cap] = output
+                    # Persist each result immediately — partial results survive a crash
+                    try:
+                        await self._memory.set(session_id, f"result_{cap}", output)
+                    except Exception as e:
+                        logger.debug(f"[Research/delegate] Memory write skipped for {cap}: {e}")
 
         return {"delegation_results": results, "errors": errors}
 
@@ -396,10 +413,12 @@ class ResearchAgent(MeshAgent):
             Dict with final markdown report, sources used, and agents consulted.
         """
         query = input_data["query"]
+        session_id = input_data.get("session_id", f"research-{id(query)}")
         logger.info(f"[Research] Starting LangGraph pipeline for: {query[:80]}...")
 
         initial_state: ResearchState = {
             "original_query": query,
+            "session_id": session_id,
             "subtasks": [],
             "discovered_agents": {},
             "delegation_results": {},
@@ -413,6 +432,17 @@ class ResearchAgent(MeshAgent):
             rec.manifest.name
             for rec in final_state["discovered_agents"].values()
         ]
+
+        # Persist completed report to memory for dashboard / replay
+        try:
+            await self._memory.set(session_id, "final_report", {
+                "report": final_state["final_report"],
+                "agents_consulted": agents_consulted,
+                "sources_used": list(final_state["delegation_results"].keys()),
+                "errors": final_state["errors"],
+            })
+        except Exception as e:
+            logger.debug(f"[Research] Memory write skipped: {e}")
 
         return {
             "report": final_state["final_report"],

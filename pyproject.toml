@@ -34,6 +34,7 @@ dependencies = [
     "rich>=13.0.0",
     "click>=8.1.0",
     "python-jose[cryptography]>=3.3.0",
+    "pandas>=2.0.0",
 ]
 
 [project.optional-dependencies]

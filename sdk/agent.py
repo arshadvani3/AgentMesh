@@ -31,6 +31,7 @@ from typing import Any
 import httpx
 import websockets
 
+from mesh.memory import AgentMemory
 from mesh.models import (
     AgentManifest,
     AgentRecord,
@@ -114,6 +115,7 @@ class MeshAgent:
         self._active_tasks: set[str] = set()
         self._secret = secret
         self._token: str | None = None
+        self._memory: AgentMemory = AgentMemory()
 
         # Auto-discover @capability decorated methods
         for attr_name in dir(self):

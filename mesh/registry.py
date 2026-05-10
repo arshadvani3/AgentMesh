@@ -24,6 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from .db import get_db
+from .memory import get_memory
 from .models import (
     AgentManifest,
     AgentRecord,
@@ -390,6 +391,36 @@ async def get_traces(task_id: str | None = None, limit: int = 100) -> list[Trace
     """
     db = await get_db()
     return await db.list_traces(task_id=task_id, limit=limit)
+
+
+@app.get("/memory/{session_id}")
+async def get_session_memory(session_id: str) -> dict:
+    """Return all memory keys stored for a workflow session.
+
+    Useful for debugging multi-step workflows and replaying intermediate
+    results without re-running expensive agent tasks.
+
+    Args:
+        session_id: The workflow session ID (usually a task_id).
+
+    Returns:
+        Dict of all non-expired key-value pairs for the session.
+    """
+    memory = get_memory()
+    data = await memory.get_session(session_id)
+    return {"session_id": session_id, "keys": list(data.keys()), "data": data}
+
+
+@app.get("/memory")
+async def list_memory_sessions() -> dict:
+    """List all active memory session IDs.
+
+    Returns:
+        Dict with list of session IDs that have live keys.
+    """
+    memory = get_memory()
+    sessions = await memory.list_sessions()
+    return {"sessions": sessions, "count": len(sessions)}
 
 
 async def _broadcast_trace(event: TraceEvent):

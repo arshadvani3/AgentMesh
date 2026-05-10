@@ -47,10 +47,12 @@ AGENTS = [
 ]
 
 DEFAULT_QUERY = (
-    "Write a competitive analysis of LangChain vs CrewAI vs AutoGen for building "
-    "multi-agent systems. Include code examples showing how each framework handles "
-    "tool calling."
+    "Analyze the startup funding dataset — find which sectors attracted the most capital, "
+    "identify funding trends by year, generate Python code to visualize the sector breakdown, "
+    "and write a strategic investment report with specific numbers from the data."
 )
+
+DEFAULT_CSV_PATH = "data/startups.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +280,7 @@ def _render_trace_table(events: list[dict[str, Any]]) -> Table:
 # Main demo flow
 # ---------------------------------------------------------------------------
 
-async def run_demo(query: str):
+async def run_demo(query: str, csv_path: str = DEFAULT_CSV_PATH):
     """Execute the full end-to-end AgentMesh demonstration.
 
     Args:
@@ -382,12 +384,17 @@ async def run_demo(query: str):
     console.print(f"\n[bold]Step 4:[/] Delegating task to Research Agent at {research_agent_ws}...")
     start_time = datetime.utcnow()
 
+    task_id = f"task-demo-{int(time.time())}"
     task_payload = {
         "method": "task.request",
         "params": {
-            "task_id": f"task-demo-{int(time.time())}",
+            "task_id": task_id,
             "capability": "research",
-            "input_data": {"query": query},
+            "input_data": {
+                "query": query,
+                "csv_path": csv_path,
+                "session_id": task_id,
+            },
             "requester_id": "demo-script",
             "target_id": research_agent_id,
             "deadline_ms": 120000,
@@ -451,6 +458,8 @@ async def run_demo(query: str):
     stats.add_row("Total elapsed", f"{elapsed:.1f}s")
     stats.add_row("Tokens used", str(tokens_used) if tokens_used else "n/a")
     stats.add_row("Trace events", str(len(tracer.events)))
+    stats.add_row("Data source", csv_path)
+    stats.add_row("Session memory", f"GET {REGISTRY_URL}/memory/{task_id}")
     stats.add_row("Status", final_result.get("status", "unknown") if final_result else "no result")
     console.print(Panel(stats, title="[bold cyan]Run Summary", border_style="cyan"))
 
@@ -489,18 +498,27 @@ async def run_demo(query: str):
     default=DEFAULT_QUERY,
     help="Research task to submit to the mesh",
 )
-def main(query: str):
+@click.option(
+    "--csv-path",
+    default=DEFAULT_CSV_PATH,
+    show_default=True,
+    help="Local CSV file to analyse (passed to the Data Agent)",
+)
+def main(query: str, csv_path: str):
     """Run the AgentMesh end-to-end demonstration.
 
     Starts the registry and all demo agents, submits a research task,
     and prints the full trace and final report.
+
+    The Data Agent will load the CSV and compute real statistics —
+    the final report contains actual computed numbers, not LLM guesses.
     """
     # Register cleanup handlers
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda s, f: (_cleanup(), sys.exit(0)))
 
     try:
-        asyncio.run(run_demo(query))
+        asyncio.run(run_demo(query, csv_path=csv_path))
     finally:
         _cleanup()
 
