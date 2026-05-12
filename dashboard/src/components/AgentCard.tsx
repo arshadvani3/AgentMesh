@@ -27,7 +27,7 @@ import {
 } from "recharts";
 import type { AgentRecord, TraceEvent, TrustHistoryEntry } from "../types";
 
-const REGISTRY_URL = "http://localhost:8000";
+const REGISTRY_URL = import.meta.env.VITE_REGISTRY_URL ?? "http://localhost:8080";
 
 interface Props {
   record: AgentRecord;

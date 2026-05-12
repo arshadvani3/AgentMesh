@@ -7,7 +7,7 @@ how they request and deliver work, and how trust is tracked.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -56,14 +56,20 @@ class AgentManifest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class AgentStatus(StrEnum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    OFFLINE = "offline"
+
+
 class AgentRecord(BaseModel):
     """Internal registry record — manifest + runtime state."""
 
     manifest: AgentManifest
     trust_score: float = 0.5
-    status: str = "healthy"  # healthy | degraded | offline
-    registered_at: datetime = Field(default_factory=datetime.utcnow)
-    last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
+    status: AgentStatus = AgentStatus.HEALTHY
+    registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_heartbeat: datetime = Field(default_factory=lambda: datetime.now(UTC))
     tasks_completed: int = 0
     tasks_failed: int = 0
 
@@ -94,7 +100,7 @@ class TaskRequest(BaseModel):
     deadline_ms: int = Field(30000, description="Max time allowed for task completion")
     priority: int = Field(1, ge=1, le=5, description="1=lowest, 5=highest")
     context: str = Field("", description="Additional context for the agent")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class NegotiationResponse(BaseModel):
@@ -121,7 +127,7 @@ class TaskResult(BaseModel):
     error: str | None = None
     tokens_used: int = 0
     execution_time_ms: int = 0
-    completed_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -146,16 +152,26 @@ class TrustUpdate(BaseModel):
 # Trace / Observability
 # ---------------------------------------------------------------------------
 
+class TraceEventType(StrEnum):
+    REQUEST_SENT = "request_sent"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    COUNTERED = "countered"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class TraceEvent(BaseModel):
     """A single event in a cross-agent workflow trace."""
 
     trace_id: str = Field(default_factory=lambda: f"trace-{uuid.uuid4().hex[:8]}")
-    task_id: str
-    event_type: str  # request_sent | accepted | rejected | executing | completed | failed
-    from_agent: str
-    to_agent: str
+    task_id: str = Field(..., max_length=64)
+    event_type: TraceEventType
+    from_agent: str = Field(..., max_length=128)
+    to_agent: str = Field(..., max_length=128)
     payload: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
@@ -188,4 +204,4 @@ class DiscoveryResult(BaseModel):
 
     agents: list[AgentRecord]
     query: DiscoveryQuery
-    matched_at: datetime = Field(default_factory=datetime.utcnow)
+    matched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

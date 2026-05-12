@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { TraceEvent } from "../types";
 
-const WS_URL = "ws://localhost:8000/ws/dashboard";
+const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws/dashboard";
 const RECONNECT_DELAY_MS = 3000;
 
 export function useDashboardSocket(): TraceEvent[] {

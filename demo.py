@@ -18,7 +18,8 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
+from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 
 import click
@@ -36,8 +37,8 @@ load_dotenv()
 
 console = Console()
 
-REGISTRY_URL = os.environ.get("REGISTRY_URL", "http://localhost:8000")
-REGISTRY_PORT = 8000
+REGISTRY_PORT = int(os.environ.get("REGISTRY_PORT", "8080"))
+REGISTRY_URL = os.environ.get("REGISTRY_URL", f"http://localhost:{REGISTRY_PORT}")
 
 AGENTS = [
     {"name": "Research Agent", "module": "agents.research_agent", "port": 9001},
@@ -52,7 +53,7 @@ DEFAULT_QUERY = (
     "and write a strategic investment report with specific numbers from the data."
 )
 
-DEFAULT_CSV_PATH = "data/startups.csv"
+DEFAULT_CSV_PATH = str(Path(__file__).parent / "data" / "startups.csv")
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +182,7 @@ def _make_status_table(agent_status: dict[str, bool], registry_up: bool) -> Tabl
     table.add_column("Status", justify="center", min_width=12)
 
     reg_status = "[green]ONLINE[/]" if registry_up else "[yellow]STARTING...[/]"
-    table.add_row("Registry (port 8000)", reg_status)
+    table.add_row(f"Registry (port {REGISTRY_PORT})", reg_status)
 
     for name, ready in agent_status.items():
         st = "[green]REGISTERED[/]" if ready else "[yellow]STARTING...[/]"
@@ -382,7 +383,7 @@ async def run_demo(query: str, csv_path: str = DEFAULT_CSV_PATH):
         return
 
     console.print(f"\n[bold]Step 4:[/] Delegating task to Research Agent at {research_agent_ws}...")
-    start_time = datetime.utcnow()
+    start_time = datetime.now(UTC)
 
     task_id = f"task-demo-{int(time.time())}"
     task_payload = {
@@ -400,7 +401,7 @@ async def run_demo(query: str, csv_path: str = DEFAULT_CSV_PATH):
             "deadline_ms": 120000,
             "priority": 5,
             "context": "End-to-end demo run",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         },
     }
 
@@ -438,7 +439,7 @@ async def run_demo(query: str, csv_path: str = DEFAULT_CSV_PATH):
     except Exception as e:
         console.print(f"[red]Error communicating with Research Agent: {e}[/]")
 
-    elapsed = (datetime.utcnow() - start_time).total_seconds()
+    elapsed = (datetime.now(UTC) - start_time).total_seconds()
 
     # -- Step 7: Print trace --
     await asyncio.sleep(2)  # collect any lingering trace events
@@ -474,6 +475,33 @@ async def run_demo(query: str, csv_path: str = DEFAULT_CSV_PATH):
         console.print(f"[dim]Sources used: {', '.join(sources)}[/]\n")
 
         if report:
+            # Strip outer JSON wrapper if LLM double-encoded: { "report": "..." }
+            # Use regex since the string may contain unescaped newlines (invalid JSON)
+            import re as _re
+            for _ in range(3):
+                stripped = report.strip()
+                if not stripped.startswith("{"):
+                    break
+                # Try stdlib json first
+                try:
+                    inner = json.loads(stripped)
+                    if isinstance(inner, dict) and "report" in inner:
+                        report = inner["report"]
+                        continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                # Fallback: regex extract value of "report" key
+                m = _re.search(r'"report"\s*:\s*"(.*)', stripped, _re.DOTALL)
+                if m:
+                    # Grab everything after the opening quote, strip trailing }" cruft
+                    candidate = m.group(1)
+                    # Remove trailing JSON closing (last ", "sections":... or just ")
+                    candidate = _re.sub(r'",?\s*"sections".*$', "", candidate, flags=_re.DOTALL)
+                    candidate = candidate.rstrip('"\n }')
+                    if len(candidate) > 100:
+                        report = candidate
+                break
+
             console.print(Panel(
                 Markdown(report),
                 title="[bold green]Final Report",

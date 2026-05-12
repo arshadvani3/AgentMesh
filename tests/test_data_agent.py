@@ -113,9 +113,12 @@ class TestLoadCsvPath:
     """Test the _load_csv helper (local file path)."""
 
     @pytest.mark.asyncio
-    async def test_load_local_path(self, tmp_path):
+    async def test_load_local_path(self, tmp_path, monkeypatch):
         """_load_csv loads a local file when csv_path is given."""
+        import agents.data_agent as da
         from agents.data_agent import _load_csv
+
+        monkeypatch.setattr(da, "_CSV_SAFE_DIR", tmp_path.resolve())
 
         csv_file = tmp_path / "test.csv"
         csv_file.write_text(SAMPLE_CSV)
@@ -123,7 +126,7 @@ class TestLoadCsvPath:
         content, source = await _load_csv({"csv_path": str(csv_file)})
         assert content is not None
         assert "Alpha" in content
-        assert source == str(csv_file)
+        assert source == str(csv_file.resolve())
 
     @pytest.mark.asyncio
     async def test_load_missing_path_returns_none(self):

@@ -361,7 +361,7 @@ DiscoveryQuery(
 pytest tests/ -v
 ```
 
-75 tests, no external dependencies required. The in-memory database fallback means no PostgreSQL or Docker needed.
+164 tests, no external dependencies required. The in-memory database fallback means no PostgreSQL or Docker needed.
 
 ---
 

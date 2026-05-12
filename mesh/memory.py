@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from typing import Any
 
 logger = logging.getLogger("agentmesh.memory")
@@ -78,6 +79,9 @@ class AgentMemory:
     def _session_pattern(self, session_id: str) -> str:
         return f"agentmesh:session:{session_id}:*"
 
+    # Redis set that tracks all live session IDs — avoids KEYS * scans
+    _SESSION_INDEX = "agentmesh:session_index"
+
     # ---------------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------------
@@ -98,6 +102,7 @@ class AgentMemory:
         if r:
             try:
                 await r.setex(self._ns(session_id, key), ttl, serialised)
+                await r.sadd(self._SESSION_INDEX, session_id)
                 return
             except Exception as e:
                 logger.warning(f"AgentMemory.set Redis error: {e}, falling back to memory")
@@ -184,6 +189,7 @@ class AgentMemory:
                 keys = await r.keys(pattern)
                 if keys:
                     await r.delete(*keys)
+                await r.srem(self._SESSION_INDEX, session_id)
                 return
             except Exception as e:
                 logger.warning(f"AgentMemory.clear Redis error: {e}")
@@ -199,14 +205,8 @@ class AgentMemory:
         r = await self._get_redis()
         if r:
             try:
-                keys = await r.keys("agentmesh:session:*")
-                # Extract unique session IDs from  agentmesh:session:<sid>:<key>
-                sessions: set[str] = set()
-                for k in keys:
-                    parts = k.split(":")
-                    if len(parts) >= 4:
-                        sessions.add(parts[2])
-                return sorted(sessions)
+                members = await r.smembers(self._SESSION_INDEX)
+                return sorted(members)
             except Exception as e:
                 logger.warning(f"AgentMemory.list_sessions Redis error: {e}")
 
@@ -220,11 +220,13 @@ class AgentMemory:
 # ---------------------------------------------------------------------------
 
 _memory_instance: AgentMemory | None = None
+_memory_lock = threading.Lock()
 
 
 def get_memory() -> AgentMemory:
     """Return the shared AgentMemory singleton."""
     global _memory_instance
-    if _memory_instance is None:
-        _memory_instance = AgentMemory()
+    with _memory_lock:
+        if _memory_instance is None:
+            _memory_instance = AgentMemory()
     return _memory_instance

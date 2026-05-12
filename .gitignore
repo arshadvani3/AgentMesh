@@ -49,3 +49,7 @@ models/
 # Personal study / application notes
 STUDY_GUIDE.md
 PROJECT_CONTEXT.md
+PHASE10_GUIDE.md
+
+# Claude Code internal
+.claude/

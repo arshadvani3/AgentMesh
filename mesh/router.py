@@ -10,12 +10,14 @@ Results are ranked by a composite score:
 
 from __future__ import annotations
 
+import asyncio
+import functools
 from typing import Any
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from .models import AgentRecord, DiscoveryQuery
+from .models import AgentRecord, AgentStatus, DiscoveryQuery
 
 
 class TaskRouter:
@@ -30,14 +32,20 @@ class TaskRouter:
         if self._model is None:
             self._model = SentenceTransformer(self._model_name)
 
+    async def _encode(self, text: str) -> Any:
+        """Run model.encode() in a thread so it doesn't block the event loop."""
+        self._ensure_model()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, functools.partial(self._model.encode, text, normalize_embeddings=True)
+        )
+
     async def index_agent(self, record: AgentRecord):
         """Index an agent's capabilities for semantic search."""
-        self._ensure_model()
-
         entries = []
         for cap in record.manifest.capabilities:
             text = f"{cap.name}: {cap.description}"
-            embedding = self._model.encode(text, normalize_embeddings=True)
+            embedding = await self._encode(text)
             entries.append((cap.name, cap.description, embedding, cap.cost_per_call_usd, cap.avg_latency_ms))
 
         self._index[record.manifest.agent_id] = entries
@@ -60,14 +68,18 @@ class TaskRouter:
         if query.capability_description and len(query.capability_description) > 1000:
             query = query.model_copy(update={"capability_description": query.capability_description[:1000]})
 
-        self._ensure_model()
         scored: list[tuple[float, AgentRecord]] = []
+
+        # Encode query once — reused for every candidate capability comparison
+        query_emb = None
+        if query.capability_description:
+            query_emb = await self._encode(query.capability_description)
 
         for record in candidates:
             agent_id = record.manifest.agent_id
 
             # Skip offline agents entirely
-            if record.status == "offline":
+            if record.status == AgentStatus.OFFLINE:
                 continue
 
             if agent_id not in self._index:
@@ -107,10 +119,7 @@ class TaskRouter:
                     continue
 
                 # 2. Semantic similarity
-                if query.capability_description:
-                    query_emb = self._model.encode(
-                        query.capability_description, normalize_embeddings=True
-                    )
+                if query_emb is not None:
                     similarity = float(np.dot(query_emb, cap_emb))
                     best_match = max(best_match, similarity)
 
@@ -130,7 +139,7 @@ class TaskRouter:
             availability = max(0.0, 1.0 - (active / max_tasks))
 
             # Degraded agents are still routable but penalised
-            if record.status == "degraded":
+            if record.status == AgentStatus.DEGRADED:
                 availability *= 0.3
 
             # Compute cost factor: cheaper relative to budget scores higher

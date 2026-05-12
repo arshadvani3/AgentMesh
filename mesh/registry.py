@@ -16,18 +16,20 @@ import logging
 import os
 from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from pydantic import BaseModel
 
 from .db import get_db
 from .memory import get_memory
 from .models import (
     AgentManifest,
     AgentRecord,
+    AgentStatus,
     DiscoveryQuery,
     DiscoveryResult,
     TraceEvent,
@@ -38,7 +40,7 @@ from .router import TaskRouter
 # JWT configuration
 # ---------------------------------------------------------------------------
 
-_JWT_SECRET = os.environ.get("AGENT_SECRET", "agentmesh-dev-secret-change-in-prod")
+_JWT_SECRET: str | None = os.environ.get("AGENT_SECRET") or None
 _JWT_ALGORITHM = "HS256"
 _JWT_EXPIRE_HOURS = 24
 
@@ -48,12 +50,13 @@ logger = logging.getLogger("agentmesh.registry")
 
 # WebSocket connections keyed by agent_id (always in-memory -- not persisted)
 _ws_connections: dict[str, WebSocket] = {}
-_dashboard_ws: list[WebSocket] = []
+_dashboard_ws: set[WebSocket] = set()
 
 # Real-time task load tracking (in-memory)
 _active_task_counts: dict[str, int] = {}
 _failure_streaks: dict[str, int] = {}
 _degraded_since: dict[str, datetime] = {}
+_circuit_lock = asyncio.Lock()  # guards _failure_streaks and _degraded_since
 _latency_samples: dict[str, deque] = {}  # agent_id -> deque of last 20 elapsed_ms values
 _trust_history: dict[str, list[dict]] = {}  # agent_id -> [{score, timestamp}], last 50
 _total_tasks_completed: int = 0
@@ -76,22 +79,26 @@ async def _health_check_loop():
         try:
             db = await get_db()
             agents = await db.list_agents()
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
             for record in agents:
                 agent_id = record.manifest.agent_id
                 if now - record.last_heartbeat > HEARTBEAT_TIMEOUT:
-                    if record.status != "offline":
-                        record.status = "offline"
-                        await db.update_heartbeat(agent_id, "offline")
+                    if record.status != AgentStatus.OFFLINE:
+                        record.status = AgentStatus.OFFLINE
+                        await db.update_heartbeat(agent_id, AgentStatus.OFFLINE)
 
             # Circuit breaker cooldown: restore degraded agents after timeout
-            for agent_id, degraded_at in list(_degraded_since.items()):
-                elapsed = (now - degraded_at).total_seconds()
-                if elapsed > CIRCUIT_COOLDOWN_SECONDS:
-                    await db.update_heartbeat(agent_id, "healthy")
+            async with _circuit_lock:
+                to_reset = [
+                    aid for aid, degraded_at in _degraded_since.items()
+                    if (now - degraded_at).total_seconds() > CIRCUIT_COOLDOWN_SECONDS
+                ]
+            for agent_id in to_reset:
+                await db.update_heartbeat(agent_id, AgentStatus.HEALTHY)
+                async with _circuit_lock:
                     _failure_streaks.pop(agent_id, None)
-                    del _degraded_since[agent_id]
-                    logger.info(f"Circuit breaker reset for {agent_id} after cooldown")
+                    _degraded_since.pop(agent_id, None)
+                logger.info(f"Circuit breaker reset for {agent_id} after cooldown")
         except Exception as e:
             logger.warning(f"Health check error: {e}")
         await asyncio.sleep(HEALTH_CHECK_INTERVAL)
@@ -131,10 +138,12 @@ router_engine = TaskRouter()
 # ---------------------------------------------------------------------------
 
 def _create_token(agent_id: str) -> str:
-    """Issue a signed JWT for an agent."""
+    """Issue a signed JWT for an agent. Only called when AGENT_SECRET is set."""
+    if not _JWT_SECRET:
+        return ""
     payload = {
         "sub": agent_id,
-        "exp": datetime.utcnow() + timedelta(hours=_JWT_EXPIRE_HOURS),
+        "exp": datetime.now(UTC) + timedelta(hours=_JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
 
@@ -147,8 +156,8 @@ async def _verify_token(
     Returns "anonymous" when AGENT_SECRET is not set (dev mode without auth).
     Raises HTTP 401 when auth is enabled but token is missing or invalid.
     """
-    if _JWT_SECRET == "agentmesh-dev-secret-change-in-prod":
-        return "anonymous"  # auth disabled in dev
+    if not _JWT_SECRET:
+        return "anonymous"  # auth disabled — no AGENT_SECRET in env
     if not credentials:
         raise HTTPException(401, "Missing Authorization header")
     try:
@@ -158,16 +167,18 @@ async def _verify_token(
         raise HTTPException(401, "Invalid or expired token") from exc
 
 
+class _TokenRequest(BaseModel):
+    agent_id: str
+    secret: str
+
+
 @app.post("/auth/token")
-async def get_token(agent_id: str, secret: str) -> dict:
+async def get_token(body: _TokenRequest) -> dict:
     """Issue a JWT for an agent.
 
     The agent must supply its agent_id and the shared AGENT_SECRET configured
-    on the registry. Returns a bearer token valid for 24 hours.
-
-    Args:
-        agent_id: The agent requesting a token.
-        secret: The pre-shared secret (must match AGENT_SECRET env var).
+    on the registry. Secret is transmitted in the POST body, not query params,
+    so it is excluded from server logs and browser history.
 
     Returns:
         Dict with 'access_token' and 'token_type'.
@@ -176,12 +187,12 @@ async def get_token(agent_id: str, secret: str) -> dict:
         HTTPException 401: If secret is incorrect.
         HTTPException 404: If agent is not registered.
     """
-    if secret != _JWT_SECRET:
+    if body.secret != _JWT_SECRET:
         raise HTTPException(401, "Invalid secret")
     db = await get_db()
-    if not await db.get_agent(agent_id):
-        raise HTTPException(404, f"Agent {agent_id} not found")
-    token = _create_token(agent_id)
+    if not await db.get_agent(body.agent_id):
+        raise HTTPException(404, f"Agent {body.agent_id} not found")
+    token = _create_token(body.agent_id)
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -190,7 +201,10 @@ async def get_token(agent_id: str, secret: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @app.post("/agents/register", response_model=AgentRecord)
-async def register_agent(manifest: AgentManifest) -> AgentRecord:
+async def register_agent(
+    manifest: AgentManifest,
+    caller: str = Depends(_verify_token),
+) -> AgentRecord:
     """Register a new agent on the mesh.
 
     Args:
@@ -202,9 +216,13 @@ async def register_agent(manifest: AgentManifest) -> AgentRecord:
     Raises:
         HTTPException 409: If an agent with this ID is already registered.
     """
+    # When auth is enabled, the token's sub must match the agent being registered.
+    if caller != "anonymous" and caller != manifest.agent_id:
+        raise HTTPException(403, "Token agent_id does not match manifest.agent_id")
+
     db = await get_db()
     existing = await db.get_agent(manifest.agent_id)
-    if existing:
+    if existing and existing.status != AgentStatus.OFFLINE:
         raise HTTPException(409, f"Agent {manifest.agent_id} already registered")
 
     record = AgentRecord(manifest=manifest)
@@ -218,7 +236,7 @@ async def register_agent(manifest: AgentManifest) -> AgentRecord:
 
 
 @app.delete("/agents/{agent_id}")
-async def deregister_agent(agent_id: str, _: str = Depends(_verify_token)) -> dict:
+async def deregister_agent(agent_id: str, caller: str = Depends(_verify_token)) -> dict:
     """Remove an agent from the mesh.
 
     Args:
@@ -228,8 +246,12 @@ async def deregister_agent(agent_id: str, _: str = Depends(_verify_token)) -> di
         Confirmation dict.
 
     Raises:
+        HTTPException 403: If the caller does not own this agent.
         HTTPException 404: If the agent is not found.
     """
+    if caller != "anonymous" and caller != agent_id:
+        raise HTTPException(403, "Cannot deregister another agent")
+
     db = await get_db()
     removed = await db.delete_agent(agent_id)
     if not removed:
@@ -284,7 +306,7 @@ async def discover_agents(query: DiscoveryQuery) -> DiscoveryResult:
     Uses dual matching:
     1. Exact name match on capability_name
     2. Semantic similarity on capability_description
-    Results are ranked by composite score: match * 0.4 + trust * 0.4 + availability * 0.2
+    Results are ranked by composite score: match*0.35 + trust*0.35 + availability*0.15 + cost*0.15
 
     Args:
         query: DiscoveryQuery parameters.
@@ -295,7 +317,7 @@ async def discover_agents(query: DiscoveryQuery) -> DiscoveryResult:
     db = await get_db()
     all_agents = await db.list_agents()
     # Include healthy and degraded agents; router handles offline exclusion
-    routable = [r for r in all_agents if r.status != "offline"]
+    routable = [r for r in all_agents if r.status != AgentStatus.OFFLINE]
     results = await router_engine.match(query, routable, task_counts=_active_task_counts)
     return DiscoveryResult(agents=results, query=query)
 
@@ -323,14 +345,14 @@ async def heartbeat(websocket: WebSocket, agent_id: str):
 
     await websocket.accept()
     _ws_connections[agent_id] = websocket
-    await db.update_heartbeat(agent_id, "healthy")
+    await db.update_heartbeat(agent_id, AgentStatus.HEALTHY)
 
     try:
         while True:
             data = await websocket.receive_json()
 
             if data.get("type") == "heartbeat":
-                await db.update_heartbeat(agent_id, "healthy")
+                await db.update_heartbeat(agent_id, AgentStatus.HEALTHY)
                 await websocket.send_json({"type": "heartbeat_ack"})
 
             elif data.get("type") == "task_start":
@@ -342,7 +364,7 @@ async def heartbeat(websocket: WebSocket, agent_id: str):
                 if elapsed_ms is not None:
                     if agent_id not in _latency_samples:
                         _latency_samples[agent_id] = deque(maxlen=LATENCY_WINDOW)
-                    _latency_samples[agent_id].append(float(elapsed_ms))
+                    _latency_samples[agent_id].append(max(0.0, min(float(elapsed_ms), 600_000.0)))
                     avg = sum(_latency_samples[agent_id]) / len(_latency_samples[agent_id])
                     # Update avg_latency_ms on all capabilities for this agent
                     rec = await db.get_agent(agent_id)
@@ -357,7 +379,7 @@ async def heartbeat(websocket: WebSocket, agent_id: str):
                 await _broadcast_trace(event)
 
     except WebSocketDisconnect:
-        await db.update_heartbeat(agent_id, "offline")
+        await db.update_heartbeat(agent_id, AgentStatus.OFFLINE)
         _ws_connections.pop(agent_id, None)
 
 
@@ -373,16 +395,16 @@ async def dashboard_stream(websocket: WebSocket):
         websocket: The dashboard client WebSocket.
     """
     await websocket.accept()
-    _dashboard_ws.append(websocket)
+    _dashboard_ws.add(websocket)
     try:
         while True:
             await websocket.receive_text()  # keep-alive
     except WebSocketDisconnect:
-        _dashboard_ws.remove(websocket)
+        _dashboard_ws.discard(websocket)
 
 
 @app.get("/traces", response_model=list[TraceEvent])
-async def get_traces(task_id: str | None = None, limit: int = 100) -> list[TraceEvent]:
+async def get_traces(task_id: str | None = None, limit: int = Query(default=100, ge=1, le=1000)) -> list[TraceEvent]:
     """Query stored trace events.
 
     Args:
@@ -396,12 +418,49 @@ async def get_traces(task_id: str | None = None, limit: int = 100) -> list[Trace
     return await db.list_traces(task_id=task_id, limit=limit)
 
 
+class _TraceRequest(BaseModel):
+    task_id: str
+    event_type: str
+    from_agent: str
+    to_agent: str
+    payload: dict = {}
+
+
+@app.post("/traces", status_code=201)
+async def post_trace(body: _TraceRequest) -> dict:
+    """Accept a trace event from an agent and broadcast it to dashboard subscribers.
+
+    Args:
+        body: Trace event fields from the calling agent.
+
+    Returns:
+        Acknowledgement dict with the assigned trace_id.
+    """
+    import uuid
+    event = TraceEvent(
+        trace_id=str(uuid.uuid4()),
+        task_id=body.task_id[:64],
+        event_type=body.event_type,
+        from_agent=body.from_agent[:128],
+        to_agent=body.to_agent[:128],
+        payload=body.payload,
+        timestamp=datetime.now(UTC),
+    )
+    db = await get_db()
+    await db.save_trace(event)
+    await _broadcast_trace(event)
+    return {"trace_id": event.trace_id}
+
+
 @app.get("/memory/{session_id}")
-async def get_session_memory(session_id: str) -> dict:
+async def get_session_memory(
+    session_id: str,
+    _caller: str = Depends(_verify_token),
+) -> dict:
     """Return all memory keys stored for a workflow session.
 
-    Useful for debugging multi-step workflows and replaying intermediate
-    results without re-running expensive agent tasks.
+    Requires auth when AGENT_SECRET is set — session data may contain
+    sensitive intermediate task inputs/outputs.
 
     Args:
         session_id: The workflow session ID (usually a task_id).
@@ -415,7 +474,7 @@ async def get_session_memory(session_id: str) -> dict:
 
 
 @app.get("/memory")
-async def list_memory_sessions() -> dict:
+async def list_memory_sessions(_caller: str = Depends(_verify_token)) -> dict:
     """List all active memory session IDs.
 
     Returns:
@@ -481,14 +540,13 @@ async def _broadcast_trace(event: TraceEvent):
     Args:
         event: The TraceEvent to broadcast.
     """
-    dead = []
+    dead = set()
     for ws in _dashboard_ws:
         try:
             await ws.send_json(event.model_dump(mode="json"))
         except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _dashboard_ws.remove(ws)
+            dead.add(ws)
+    _dashboard_ws.difference_update(dead)
 
 
 # ---------------------------------------------------------------------------
@@ -538,26 +596,36 @@ async def update_trust(agent_id: str, success: bool, quality: float = 0.5, _: st
         record.tasks_failed,
     )
 
-    # Circuit breaker logic
-    if not success:
-        _failure_streaks[agent_id] = _failure_streaks.get(agent_id, 0) + 1
-        if _failure_streaks[agent_id] >= CIRCUIT_OPEN_THRESHOLD:
-            await db.update_heartbeat(agent_id, "degraded")
-            _degraded_since[agent_id] = datetime.utcnow()
-            logger.warning(f"Circuit opened for {agent_id} after {_failure_streaks[agent_id]} failures")
-    else:
-        _failure_streaks[agent_id] = 0
-        if agent_id in _degraded_since:
-            await db.update_heartbeat(agent_id, "healthy")
-            del _degraded_since[agent_id]
-            logger.info(f"Circuit closed for {agent_id} after successful task")
+    # Circuit breaker logic — read-modify-write under lock, I/O outside
+    should_degrade = False
+    was_degraded = False
+    streak = 0
+    async with _circuit_lock:
+        if not success:
+            _failure_streaks[agent_id] = _failure_streaks.get(agent_id, 0) + 1
+            streak = _failure_streaks[agent_id]
+            should_degrade = streak >= CIRCUIT_OPEN_THRESHOLD
+        else:
+            _failure_streaks[agent_id] = 0
+            was_degraded = agent_id in _degraded_since
+            if was_degraded:
+                _degraded_since.pop(agent_id, None)
+
+    if not success and should_degrade:
+        async with _circuit_lock:
+            _degraded_since[agent_id] = datetime.now(UTC)
+        await db.update_heartbeat(agent_id, AgentStatus.DEGRADED)
+        logger.warning(f"Circuit opened for {agent_id} after {streak} failures")
+    elif success and was_degraded:
+        await db.update_heartbeat(agent_id, AgentStatus.HEALTHY)
+        logger.info(f"Circuit closed for {agent_id} after successful task")
 
     # Record trust history for dashboard sparklines
     if agent_id not in _trust_history:
         _trust_history[agent_id] = []
     _trust_history[agent_id].append({
         "score": round(new_trust, 4),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     })
     if len(_trust_history[agent_id]) > TRUST_HISTORY_WINDOW:
         _trust_history[agent_id] = _trust_history[agent_id][-TRUST_HISTORY_WINDOW:]

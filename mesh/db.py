@@ -12,42 +12,46 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from collections import deque
+from datetime import UTC, datetime
 from typing import Any
 
-from .models import AgentManifest, AgentRecord, TraceEvent
+from .models import AgentManifest, AgentRecord, AgentStatus, TraceEvent
 
 logger = logging.getLogger("agentmesh.db")
 
 _pool = None  # asyncpg pool singleton
+_pool_lock = asyncio.Lock()
 
 
 async def _ensure_pool():
     """Create the asyncpg connection pool if it does not exist."""
     global _pool
-    if _pool is not None:
-        return _pool
+    async with _pool_lock:
+        if _pool is not None:
+            return _pool
 
-    try:
-        import asyncpg  # noqa: PLC0415
-    except ImportError:
-        logger.warning("asyncpg not installed -- using in-memory fallback")
-        return None
+        try:
+            import asyncpg  # noqa: PLC0415
+        except ImportError:
+            logger.warning("asyncpg not installed -- using in-memory fallback")
+            return None
 
-    database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        return None
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            return None
 
-    try:
-        _pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
-        logger.info("Connected to PostgreSQL")
-        return _pool
-    except Exception as e:
-        logger.warning(f"PostgreSQL connection failed ({e}) -- using in-memory fallback")
-        return None
+        try:
+            _pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+            logger.info("Connected to PostgreSQL")
+            return _pool
+        except Exception as e:
+            logger.warning(f"PostgreSQL connection failed ({e}) -- using in-memory fallback")
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +73,7 @@ class Database:
         self._pool = pool
         # In-memory fallback stores
         self._agents: dict[str, AgentRecord] = {}
-        self._traces: list[TraceEvent] = []
+        self._traces: deque[TraceEvent] = deque(maxlen=10_000)
         self._task_store: dict[str, dict[str, Any]] = {}
 
     @property
@@ -168,16 +172,16 @@ class Database:
             )
             return result.endswith("1")
 
-    async def update_heartbeat(self, agent_id: str, status: str = "healthy") -> None:
+    async def update_heartbeat(self, agent_id: str, status: AgentStatus = AgentStatus.HEALTHY) -> None:
         """Update the last_heartbeat timestamp and status for an agent.
 
         Args:
             agent_id: The agent to update.
-            status: New status string.
+            status: New agent status.
         """
         if not self._pool:
             if agent_id in self._agents:
-                self._agents[agent_id].last_heartbeat = datetime.utcnow()
+                self._agents[agent_id].last_heartbeat = datetime.now(UTC)
                 self._agents[agent_id].status = status
             return
 
@@ -270,7 +274,7 @@ class Database:
             List of TraceEvent objects.
         """
         if not self._pool:
-            events = self._traces
+            events: list[TraceEvent] = list(self._traces)
             if task_id:
                 events = [e for e in events if e.task_id == task_id]
             return events[-limit:]
@@ -340,6 +344,7 @@ def _row_to_trace(row) -> TraceEvent:
 # ---------------------------------------------------------------------------
 
 _db_instance: Database | None = None
+_db_lock = asyncio.Lock()
 
 
 async def get_db() -> Database:
@@ -349,7 +354,8 @@ async def get_db() -> Database:
         Initialized Database (PostgreSQL or in-memory fallback).
     """
     global _db_instance
-    if _db_instance is None:
-        pool = await _ensure_pool()
-        _db_instance = Database(pool)
+    async with _db_lock:
+        if _db_instance is None:
+            pool = await _ensure_pool()
+            _db_instance = Database(pool)
     return _db_instance

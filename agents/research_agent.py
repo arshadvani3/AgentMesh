@@ -38,6 +38,7 @@ class ResearchState(TypedDict):
 
     original_query: str
     session_id: str                        # task_id used as memory namespace
+    csv_path: str                          # optional local CSV for data analysis
     subtasks: list[dict[str, str]]         # [{capability, description, context}]
     discovered_agents: dict[str, Any]      # capability -> AgentRecord
     delegation_results: dict[str, Any]     # capability -> TaskResult.output
@@ -226,14 +227,19 @@ class ResearchAgent(MeshAgent):
 
         logger.info(f"[Research/delegate] Delegating {len(work)} subtasks in parallel")
 
+        csv_path = state.get("csv_path", "")
+
         async def _run_one(cap: str, subtask: dict, target: Any):
             try:
+                payload: dict = {
+                    "query": subtask["description"],
+                    "context": subtask.get("context", ""),
+                }
+                if cap == "analyze_csv" and csv_path:
+                    payload["csv_path"] = csv_path
                 result = await self.delegate(
                     capability=cap,
-                    input_data={
-                        "query": subtask["description"],
-                        "context": subtask.get("context", ""),
-                    },
+                    input_data=payload,
                     target=target,
                 )
                 logger.info(f"[Research/delegate] '{cap}' completed in {result.execution_time_ms}ms")
@@ -285,7 +291,17 @@ class ResearchAgent(MeshAgent):
                     input_data={"topic": query, "data": results},
                     target=discovered["write_report"],
                 )
-                return {"final_report": result.output.get("report", str(result.output))}
+                report = result.output.get("report", str(result.output))
+                # Unwrap if the Writer Agent double-encoded the report as a JSON string
+                if isinstance(report, str) and report.strip().startswith("{"):
+                    try:
+                        import json as _json
+                        inner = _json.loads(report)
+                        if isinstance(inner, dict) and "report" in inner:
+                            report = inner["report"]
+                    except (ValueError, KeyError):
+                        pass
+                return {"final_report": report}
             except Exception as e:
                 logger.warning(f"[Research/synthesize] WriterAgent failed: {e} -- using LLM fallback")
 
@@ -316,12 +332,40 @@ class ResearchAgent(MeshAgent):
             SystemMessage(content=(
                 "You are a senior technical writer. Synthesize the provided research "
                 "data into a comprehensive, well-structured markdown report. "
-                "Include an executive summary and clear conclusions."
+                "Include an executive summary and clear conclusions. "
+                "Respond with plain markdown only — no JSON, no code fences around the report."
             )),
             HumanMessage(content=f"Write a comprehensive report using this data:\n\n{context}"),
         ])
 
-        return {"final_report": response.content.strip()}
+        raw = response.content.strip()
+
+        # Strip markdown code fences if the LLM wrapped the whole report
+        import re as _re
+        fence = _re.match(r"^```(?:json|markdown)?\s*([\s\S]*?)```\s*$", raw)
+        if fence:
+            raw = fence.group(1).strip()
+
+        # Strip JSON envelope if LLM double-encoded: { "report": "..." }
+        if raw.startswith("{"):
+            try:
+                import json as _json
+                inner = _json.loads(raw)
+                if isinstance(inner, dict) and "report" in inner:
+                    raw = inner["report"]
+            except (ValueError, KeyError):
+                # Regex fallback for unescaped newlines in JSON string
+                m = _re.search(r'"report"\s*:\s*"([\s\S]*?)",?\s*"sections"', raw)
+                if m:
+                    raw = m.group(1)
+                else:
+                    m2 = _re.search(r'"report"\s*:\s*"([\s\S]+)', raw)
+                    if m2:
+                        candidate = m2.group(1).rstrip('" \n}')
+                        if len(candidate) > 50:
+                            raw = candidate
+
+        return {"final_report": raw}
 
     # ---------------------------------------------------------------------------
     # Conditional edges
@@ -419,6 +463,7 @@ class ResearchAgent(MeshAgent):
         initial_state: ResearchState = {
             "original_query": query,
             "session_id": session_id,
+            "csv_path": input_data.get("csv_path", ""),
             "subtasks": [],
             "discovered_agents": {},
             "delegation_results": {},

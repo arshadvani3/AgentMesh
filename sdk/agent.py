@@ -25,7 +25,7 @@ import json
 import logging
 import urllib.parse
 from collections.abc import Callable, Coroutine
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -44,6 +44,7 @@ from mesh.models import (
     TaskRequest,
     TaskResult,
     TaskStatus,
+    TraceEventType,
 )
 
 logger = logging.getLogger("agentmesh.sdk")
@@ -157,7 +158,7 @@ class MeshAgent:
         manifest = self._build_manifest()
         self._agent_id = manifest.agent_id
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{self.registry_url}/agents/register",
                 json=manifest.model_dump(mode="json"),
@@ -170,7 +171,7 @@ class MeshAgent:
                 try:
                     tok_resp = await client.post(
                         f"{self.registry_url}/auth/token",
-                        params={"agent_id": self.agent_id, "secret": self._secret},
+                        json={"agent_id": self.agent_id, "secret": self._secret},
                     )
                     if tok_resp.status_code == 200:
                         self._token = tok_resp.json()["access_token"]
@@ -190,7 +191,7 @@ class MeshAgent:
         """Deregister from the mesh."""
         self._running = False
         await self._close_mcp_clients()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             await client.delete(
                 f"{self.registry_url}/agents/{self.agent_id}",
                 headers=self._auth_headers(),
@@ -287,10 +288,10 @@ class MeshAgent:
                 pass  # heartbeat loss shouldn't fail task execution
 
         # Execute
-        start = datetime.utcnow()
+        start = datetime.now(UTC)
         try:
             output = await handler(request.input_data)
-            elapsed = int((datetime.utcnow() - start).total_seconds() * 1000)
+            elapsed = int((datetime.now(UTC) - start).total_seconds() * 1000)
 
             result = TaskResult(
                 task_id=request.task_id,
@@ -311,7 +312,7 @@ class MeshAgent:
                 except Exception:
                     pass
         except Exception as e:
-            elapsed = int((datetime.utcnow() - start).total_seconds() * 1000)
+            elapsed = int((datetime.now(UTC) - start).total_seconds() * 1000)
             result = TaskResult(
                 task_id=request.task_id,
                 executor_id=self.agent_id,
@@ -382,7 +383,7 @@ class MeshAgent:
             top_k=top_k,
             max_cost_usd=max_cost_usd,
         )
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{self.registry_url}/discover",
                 json=query.model_dump(mode="json"),
@@ -390,6 +391,29 @@ class MeshAgent:
             resp.raise_for_status()
             result = DiscoveryResult(**resp.json())
             return result.agents
+
+    async def _emit_trace(
+        self,
+        task_id: str,
+        event_type: TraceEventType,
+        to_agent: str,
+        payload: dict | None = None,
+    ) -> None:
+        """Fire-and-forget POST to /traces on the registry."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"{self.registry_url}/traces",
+                    json={
+                        "task_id": task_id,
+                        "event_type": event_type,
+                        "from_agent": self.agent_id,
+                        "to_agent": to_agent,
+                        "payload": payload or {},
+                    },
+                )
+        except Exception:
+            pass  # traces are best-effort — never fail a real task
 
     async def delegate(
         self,
@@ -431,6 +455,10 @@ class MeshAgent:
                 "method": "task.request",
                 "params": request.model_dump(mode="json"),
             }))
+            await self._emit_trace(
+                request.task_id, TraceEventType.REQUEST_SENT,
+                target.manifest.agent_id, {"capability": capability},
+            )
 
             # Wait for negotiation response
             neg_raw = await asyncio.wait_for(ws.recv(), timeout=10)
@@ -438,11 +466,19 @@ class MeshAgent:
             neg = NegotiationResponse(**neg_data)
 
             if neg.status == TaskStatus.REJECTED:
+                await self._emit_trace(
+                    request.task_id, TraceEventType.REJECTED,
+                    target.manifest.agent_id, {"reason": neg.reason},
+                )
                 raise RuntimeError(
                     f"Agent {target.manifest.agent_id} rejected: {neg.reason}"
                 )
 
             if neg.status == TaskStatus.COUNTERED:
+                await self._emit_trace(
+                    request.task_id, TraceEventType.COUNTERED,
+                    target.manifest.agent_id, neg.counter_proposal or {},
+                )
                 proposed = neg.counter_proposal or {}
                 proposed_deadline_ms = proposed.get("deadline_ms", deadline_ms * 2)
                 if proposed_deadline_ms <= deadline_ms * 1.5:
@@ -467,6 +503,11 @@ class MeshAgent:
                         f"Counter-proposal deadline too far: {proposed_deadline_ms}ms (max acceptable: {deadline_ms * 1.5}ms)"
                     )
 
+            await self._emit_trace(
+                request.task_id, TraceEventType.ACCEPTED,
+                target.manifest.agent_id, {"capability": capability},
+            )
+
             # Wait for task result
             timeout = deadline_ms / 1000
             result_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
@@ -475,6 +516,10 @@ class MeshAgent:
 
             # Evaluate output quality and report trust update
             if result.status == TaskStatus.COMPLETED:
+                await self._emit_trace(
+                    result.task_id, TraceEventType.COMPLETED,
+                    target.manifest.agent_id, {"capability": capability},
+                )
                 try:
                     eval_result = await self._evaluator.evaluate(
                         task_capability=capability,
@@ -489,6 +534,10 @@ class MeshAgent:
                     logger.warning(f"[{self.name}] Evaluation failed: {e}, defaulting quality=0.7")
                     quality = 0.7
             else:
+                await self._emit_trace(
+                    result.task_id, TraceEventType.FAILED,
+                    target.manifest.agent_id, {"capability": capability},
+                )
                 quality = 0.0
 
             await self._report_trust(
@@ -504,7 +553,7 @@ class MeshAgent:
         self, agent_id: str, task_id: str, success: bool, quality: float
     ):
         """Report a trust update to the registry."""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
                 f"{self.registry_url}/trust/update",
                 params={

@@ -162,23 +162,41 @@ class WriterAgent(MeshAgent):
         response = await self._llm.ainvoke(messages)
         raw = response.content.strip()
 
+        import re as _re
+        report_text = None
+        sections: list = []
+
+        # Primary: try extract_json (handles fences and regex extraction)
         try:
             parsed = extract_json(raw)
             if isinstance(parsed, dict):
-                report_text = parsed.get("report", raw)
+                report_text = parsed.get("report", None)
                 sections = parsed.get("sections", [])
-                return {
-                    "report": report_text,
-                    "word_count": len(report_text.split()),
-                    "sections": sections,
-                }
         except ValueError:
-            logger.warning("[WriterAgent] Could not parse JSON from LLM response, using raw content")
+            pass
+
+        # Fallback: the LLM put literal newlines inside a JSON string, breaking json.loads.
+        # Use regex to pull the report value directly from the raw string.
+        if not report_text:
+            m = _re.search(r'"report"\s*:\s*"([\s\S]*?)",?\s*"sections"', raw)
+            if m:
+                report_text = m.group(1)
+            else:
+                # Last resort: strip the outer JSON envelope manually
+                m2 = _re.search(r'"report"\s*:\s*"([\s\S]+)', raw)
+                if m2:
+                    candidate = m2.group(1).rstrip('" \n}')
+                    if len(candidate) > 50:
+                        report_text = candidate
+
+        if not report_text:
+            logger.warning("[WriterAgent] Could not extract report from LLM response, using raw")
+            report_text = raw
 
         return {
-            "report": raw,
-            "word_count": len(raw.split()),
-            "sections": [],
+            "report": report_text,
+            "word_count": len(report_text.split()),
+            "sections": sections,
         }
 
 

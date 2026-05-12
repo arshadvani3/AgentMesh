@@ -186,9 +186,9 @@ export default function App() {
       <footer className="border-t border-gray-800 px-6 py-2 flex items-center text-xs text-gray-600">
         <span>AgentMesh v0.1.0</span>
         <span className="mx-2">|</span>
-        <span>Registry: http://localhost:8000</span>
+        <span>Registry: {import.meta.env.VITE_REGISTRY_URL ?? "http://localhost:8080"}</span>
         <span className="mx-2">|</span>
-        <span>WS: ws://localhost:8000/ws/dashboard</span>
+        <span>WS: {import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws/dashboard"}</span>
       </footer>
     </div>
   );

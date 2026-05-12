@@ -22,10 +22,14 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import ipaddress
 import json
 import logging
 import os
+import socket
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -173,24 +177,59 @@ def compute_csv_stats(content: str) -> dict[str, Any]:
         return _compute_stats_numpy(content)
 
 
+_CSV_SAFE_DIR = Path(os.environ.get("CSV_SAFE_DIR", "/data/uploads")).resolve()
+
+_PRIVATE_RANGES = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+
+def _is_ssrf_url(url: str) -> bool:
+    """Return True if the URL should be blocked to prevent SSRF."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return True
+    host = parsed.hostname or ""
+    try:
+        addr = ipaddress.ip_address(socket.gethostbyname(host))
+        return any(addr in net for net in _PRIVATE_RANGES)
+    except Exception:
+        return True  # block if we can't resolve
+
+
 async def _load_csv(input_data: dict) -> tuple[str | None, str | None]:
     """Load CSV content from csv_path (local file) or csv_url (HTTP).
+
+    csv_path is restricted to CSV_SAFE_DIR (default /data/uploads).
+    csv_url blocks private/internal IP ranges to prevent SSRF.
 
     Returns (content, source_label) or (None, None) if neither key present.
     """
     if "csv_path" in input_data:
-        path = input_data["csv_path"]
+        path = Path(input_data["csv_path"]).resolve()
+        if not str(path).startswith(str(_CSV_SAFE_DIR)):
+            logger.warning(f"[DataAgent] csv_path outside safe dir: {path}")
+            return None, None
         try:
             with open(path) as f:
-                return f.read(), path
+                return f.read(), str(path)
         except OSError as e:
             logger.warning(f"[DataAgent] Could not open csv_path={path}: {e}")
             return None, None
 
     if "csv_url" in input_data:
         url = input_data["csv_url"]
+        if _is_ssrf_url(url):
+            logger.warning(f"[DataAgent] Blocked SSRF attempt: {url}")
+            return None, None
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 return resp.text, url

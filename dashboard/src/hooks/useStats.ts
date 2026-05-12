@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import type { MeshStats } from "../types";
 
-const REGISTRY_URL = "http://localhost:8000";
+const REGISTRY_URL = import.meta.env.VITE_REGISTRY_URL ?? "http://localhost:8080";
 const POLL_INTERVAL_MS = 3000;
 
 const DEFAULT_STATS: MeshStats = {

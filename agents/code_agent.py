@@ -39,12 +39,17 @@ _EXEC_TIMEOUT_SECONDS = 5
 # ---------------------------------------------------------------------------
 
 def _run_in_sandbox(code: str) -> dict:
-    """Execute a Python snippet in an isolated subprocess.
+    """Execute a Python snippet in a subprocess.
 
     Uses subprocess (not exec/eval) so:
     - No shared state with the agent process
     - Real stdout/stderr captured cleanly
     - Hard timeout via subprocess.run timeout arg
+
+    SECURITY NOTE: This provides process isolation only. The subprocess runs as
+    the same OS user with full filesystem and network access. For production use,
+    wrap with OS-level isolation (Docker --network none, bubblewrap, or nsjail)
+    before enabling execute=true on untrusted input.
 
     Args:
         code: Python source to execute.
@@ -216,7 +221,7 @@ class CodeAgent(MeshAgent):
 
         # Optionally execute each example in a sandbox
         if should_execute:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             for ex in examples:
                 code = ex.get("code", "")
                 if not code:
