@@ -9,8 +9,14 @@ description = "Peer-to-peer agent discovery and communication network"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [{ name = "Arsh Advani" }]
+authors = [{ name = "Arsh Advani", email = "arshadvani@gmail.com" }]
 keywords = ["ai", "agents", "mcp", "llm", "multi-agent", "orchestration"]
+
+[project.urls]
+Homepage = "https://github.com/arshadvani3/AgentMesh"
+Repository = "https://github.com/arshadvani3/AgentMesh"
+Documentation = "https://github.com/arshadvani3/AgentMesh#readme"
+"Bug Tracker" = "https://github.com/arshadvani3/AgentMesh/issues"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
