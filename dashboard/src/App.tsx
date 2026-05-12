@@ -2,38 +2,37 @@
  * App -- AgentMesh observability dashboard root component.
  *
  * Three views accessible via tab navigation:
- *   1. Mesh Graph -- live force-directed agent network
+ *   1. Mesh Graph    -- live force-directed agent network
  *   2. Trace Timeline -- swimlane view of cross-agent workflows
- *   3. Agent Detail -- selected agent stats and history
+ *   3. Memory        -- live session state inspector
  *
  * Data sources:
  *   - REST polling: GET /agents (every 5s via useAgents)
+ *   - REST polling: GET /stats  (every 3s via useStats)
  *   - WebSocket: ws://localhost:8000/ws/dashboard (via useDashboardSocket)
  */
 
 import { useState } from "react";
-import { Activity, GitBranch, Network, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { Activity, Database, GitBranch, Network, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import AgentCard from "./components/AgentCard";
+import MemoryPanel from "./components/MemoryPanel";
 import MeshGraph from "./components/MeshGraph";
 import TraceTimeline from "./components/TraceTimeline";
 import { useAgents } from "./hooks/useAgents";
 import { useDashboardSocket } from "./hooks/useDashboardSocket";
+import { useStats } from "./hooks/useStats";
 import type { AgentRecord } from "./types";
 
-type Tab = "graph" | "timeline";
+type Tab = "graph" | "timeline" | "memory";
 
 export default function App() {
   const { agents, loading, error } = useAgents();
   const traces = useDashboardSocket();
+  const stats = useStats();
   const [activeTab, setActiveTab] = useState<Tab>("graph");
   const [selectedAgent, setSelectedAgent] = useState<AgentRecord | null>(null);
 
-  const healthyCnt = agents.filter((a) => a.status === "healthy").length;
-  const offlineCnt = agents.filter((a) => a.status === "offline").length;
-  const avgTrust =
-    agents.length > 0
-      ? (agents.reduce((s, a) => s + a.trust_score, 0) / agents.length).toFixed(2)
-      : "0.00";
+  const degradedCnt = agents.filter((a) => a.status === "degraded").length;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
@@ -49,26 +48,46 @@ export default function App() {
         <div className="flex items-center gap-3 ml-4">
           <StatChip
             label="Agents"
-            value={String(agents.length)}
+            value={String(stats.total_agents || agents.length)}
             color="text-cyan-400"
           />
           <StatChip
             label="Healthy"
-            value={String(healthyCnt)}
+            value={String(stats.agents_by_status?.healthy ?? agents.filter((a) => a.status === "healthy").length)}
             color="text-green-400"
           />
-          {offlineCnt > 0 && (
+          {degradedCnt > 0 && (
             <StatChip
-              label="Offline"
-              value={String(offlineCnt)}
-              color="text-red-400"
+              label="Degraded"
+              value={String(degradedCnt)}
+              color="text-yellow-400"
             />
           )}
-          <StatChip label="Avg Trust" value={avgTrust} color="text-yellow-400" />
           <StatChip
-            label="Trace Events"
-            value={String(traces.length)}
+            label="Avg Trust"
+            value={
+              stats.avg_trust
+                ? (stats.avg_trust * 100).toFixed(0) + "%"
+                : agents.length > 0
+                ? ((agents.reduce((s, a) => s + a.trust_score, 0) / agents.length) * 100).toFixed(0) + "%"
+                : "—"
+            }
+            color="text-yellow-400"
+          />
+          <StatChip
+            label="Tasks Done"
+            value={String(stats.total_tasks_completed)}
             color="text-purple-400"
+          />
+          <StatChip
+            label="Sessions"
+            value={String(stats.active_sessions)}
+            color="text-blue-400"
+          />
+          <StatChip
+            label="Traces"
+            value={String(traces.length)}
+            color="text-gray-400"
           />
         </div>
 
@@ -107,13 +126,20 @@ export default function App() {
           icon={<Activity size={14} />}
           label="Trace Timeline"
         />
+        <TabButton
+          active={activeTab === "memory"}
+          onClick={() => setActiveTab("memory")}
+          icon={<Database size={14} />}
+          label="Memory"
+          badge={stats.active_sessions > 0 ? String(stats.active_sessions) : undefined}
+        />
       </nav>
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* View area */}
         <div
-          className={`flex-1 overflow-hidden p-4 ${selectedAgent ? "pr-2" : ""}`}
+          className={`flex-1 overflow-hidden p-4 ${selectedAgent && activeTab !== "memory" ? "pr-2" : ""}`}
         >
           {activeTab === "graph" && (
             <div className="h-full relative">
@@ -130,10 +156,16 @@ export default function App() {
               <TraceTimeline agents={agents} traces={traces} />
             </div>
           )}
+
+          {activeTab === "memory" && (
+            <div className="h-full overflow-hidden -m-4">
+              <MemoryPanel />
+            </div>
+          )}
         </div>
 
-        {/* Agent detail panel */}
-        {selectedAgent && (
+        {/* Agent detail panel -- hidden on memory tab */}
+        {selectedAgent && activeTab !== "memory" && (
           <aside className="w-80 shrink-0 border-l border-gray-800 p-4 overflow-auto">
             <div className="flex items-center gap-2 mb-3">
               <GitBranch size={14} className="text-cyan-400" />
@@ -188,11 +220,13 @@ function TabButton({
   onClick,
   icon,
   label,
+  badge,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  badge?: string;
 }) {
   return (
     <button
@@ -205,6 +239,11 @@ function TabButton({
     >
       {icon}
       {label}
+      {badge && (
+        <span className="bg-cyan-900 text-cyan-300 text-xs font-bold px-1.5 py-0.5 rounded-full leading-none">
+          {badge}
+        </span>
+      )}
     </button>
   );
 }

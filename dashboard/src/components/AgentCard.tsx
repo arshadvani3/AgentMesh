@@ -16,7 +16,7 @@ import {
   Tag,
   XCircle,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -25,7 +25,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { AgentRecord, TraceEvent } from "../types";
+import type { AgentRecord, TraceEvent, TrustHistoryEntry } from "../types";
+
+const REGISTRY_URL = "http://localhost:8000";
 
 interface Props {
   record: AgentRecord;
@@ -52,52 +54,53 @@ function statusBadge(status: AgentRecord["status"]): JSX.Element {
   );
 }
 
-/** Build a synthetic trust-score-over-time series from trace events. */
-function buildTrustHistory(
+/** Fetch real trust history from /agents/{id}/trust_history. */
+function useTrustHistory(
   agentId: string,
-  traces: TraceEvent[],
   currentTrust: number
 ): { time: string; trust: number }[] {
-  const completions = traces
-    .filter(
-      (t) =>
-        t.to_agent === agentId &&
-        (t.event_type === "completed" || t.event_type === "failed")
-    )
-    .slice(-10);
+  const [history, setHistory] = useState<TrustHistoryEntry[]>([]);
 
-  if (completions.length === 0) {
+  useEffect(() => {
+    let active = true;
+    async function fetch_() {
+      try {
+        const resp = await fetch(
+          `${REGISTRY_URL}/agents/${agentId}/trust_history`
+        );
+        if (!resp.ok) return;
+        const data: { history: TrustHistoryEntry[] } = await resp.json();
+        if (active) setHistory(data.history ?? []);
+      } catch {
+        // registry not running
+      }
+    }
+    fetch_();
+    const timer = setInterval(fetch_, 5000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [agentId]);
+
+  if (history.length === 0) {
     return [{ time: "now", trust: currentTrust }];
   }
 
-  // Simple backward simulation -- each completion nudges trust by +/-0.05
-  let score = currentTrust;
-  const points: { time: string; trust: number }[] = [
-    { time: "now", trust: currentTrust },
-  ];
-
-  for (let i = completions.length - 1; i >= 0; i--) {
-    const ev = completions[i];
-    const delta = ev.event_type === "completed" ? 0.05 : -0.05;
-    score = Math.max(0, Math.min(1, score - delta));
-    const label = new Date(ev.timestamp).toLocaleTimeString("en-US", {
+  return history.map((entry) => ({
+    time: new Date(entry.timestamp).toLocaleTimeString("en-US", {
       hour12: false,
       hour: "2-digit",
       minute: "2-digit",
-    });
-    points.unshift({ time: label, trust: Math.round(score * 100) / 100 });
-  }
-
-  return points;
+    }),
+    trust: entry.score,
+  }));
 }
 
 export default function AgentCard({ record, traces, onClose }: Props) {
   const { manifest, trust_score, status, tasks_completed, tasks_failed } = record;
 
-  const trustHistory = useMemo(
-    () => buildTrustHistory(manifest.agent_id, traces, trust_score),
-    [manifest.agent_id, traces, trust_score]
-  );
+  const trustHistory = useTrustHistory(manifest.agent_id, trust_score);
 
   const recentTasks = useMemo(
     () =>

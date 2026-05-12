@@ -42,7 +42,7 @@ const EVENT_TEXT: Record<string, string> = {
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString("en-US", { hour12: false, fractionalSecondDigits: 1 });
+  return d.toLocaleTimeString("en-US", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0").slice(0, 1);
 }
 
 /** Group trace events by the agent they are "from". */

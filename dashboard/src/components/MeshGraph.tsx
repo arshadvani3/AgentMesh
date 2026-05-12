@@ -14,6 +14,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import type { AgentRecord, GraphEdge, GraphNode, TraceEvent } from "../types";
 
+// react-force-graph-2d injects x/y at runtime — extend locally
+type FGNode = GraphNode & { x?: number; y?: number };
+
 interface Props {
   agents: AgentRecord[];
   traces: TraceEvent[];
@@ -49,7 +52,7 @@ function tracesToEdges(traces: TraceEvent[], agentIds: Set<string>): GraphEdge[]
 }
 
 export default function MeshGraph({ agents, traces, onSelectAgent }: Props) {
-  const fgRef = useRef<InstanceType<typeof ForceGraph2D> | null>(null);
+  const fgRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -94,7 +97,7 @@ export default function MeshGraph({ agents, traces, onSelectAgent }: Props) {
   );
 
   const nodeCanvasObject = useCallback(
-    (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    (node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const r = capabilitySize(node.capabilityCount) / globalScale;
       const x = node.x ?? 0;
       const y = node.y ?? 0;
