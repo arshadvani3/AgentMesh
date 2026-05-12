@@ -22,7 +22,7 @@ from rich.table import Table
 
 console = Console()
 
-REGISTRY_URL = os.environ.get("REGISTRY_URL", "http://localhost:8000")
+REGISTRY_URL = os.environ.get("REGISTRY_URL", "http://localhost:8080")
 
 
 @click.group()
@@ -41,7 +41,7 @@ def registry():
 
 @registry.command("start")
 @click.option("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
-@click.option("--port", default=8000, type=int, help="Bind port (default: 8000)")
+@click.option("--port", default=8080, type=int, help="Bind port (default: 8080)")
 @click.option("--reload", is_flag=True, default=False, help="Enable auto-reload")
 @click.option(
     "--log-level",
@@ -85,7 +85,7 @@ def agent():
     "--registry-url",
     default=REGISTRY_URL,
     envvar="REGISTRY_URL",
-    help="Registry URL (default: http://localhost:8000)",
+    help="Registry URL (default: http://localhost:8080)",
 )
 @click.option(
     "--status",
