@@ -47,6 +47,26 @@ export interface TraceEvent {
   timestamp: string;
 }
 
+export interface TrustHistoryEntry {
+  score: number;
+  timestamp: string;
+}
+
+export interface MeshStats {
+  total_agents: number;
+  agents_by_status: Record<string, number>;
+  avg_trust: number;
+  total_tasks_completed: number;
+  active_sessions: number;
+  active_task_counts: Record<string, number>;
+}
+
+export interface MemorySession {
+  session_id: string;
+  keys: string[];
+  data: Record<string, unknown>;
+}
+
 /** Graph node for the force-directed mesh visualization. */
 export interface GraphNode {
   id: string;

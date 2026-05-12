@@ -31,6 +31,8 @@ from typing import Any
 import httpx
 import websockets
 
+from mesh.evaluator import OutputEvaluator
+from mesh.mcp_client import MCPToolClient
 from mesh.memory import AgentMemory
 from mesh.models import (
     AgentManifest,
@@ -116,6 +118,8 @@ class MeshAgent:
         self._secret = secret
         self._token: str | None = None
         self._memory: AgentMemory = AgentMemory()
+        self._evaluator: OutputEvaluator = OutputEvaluator()
+        self._mcp_clients: dict[str, MCPToolClient] = {}
 
         # Auto-discover @capability decorated methods
         for attr_name in dir(self):
@@ -185,6 +189,7 @@ class MeshAgent:
     async def stop(self):
         """Deregister from the mesh."""
         self._running = False
+        await self._close_mcp_clients()
         async with httpx.AsyncClient() as client:
             await client.delete(
                 f"{self.registry_url}/agents/{self.agent_id}",
@@ -329,6 +334,36 @@ class MeshAgent:
             "params": result.model_dump(mode="json"),
         }))
 
+    # --- MCP Tool Access ---
+
+    async def get_mcp_tool(self, server_name: str) -> MCPToolClient:
+        """Return a connected MCPToolClient for the named server.
+
+        Lazily connects on first use. Falls back to mock mode if the server
+        isn't configured in ~/.agentmesh/mcp_servers.json.
+        """
+        if server_name not in self._mcp_clients:
+            client = MCPToolClient(server_name)
+            await client.connect()
+            self._mcp_clients[server_name] = client
+        return self._mcp_clients[server_name]
+
+    async def call_mcp_tool(
+        self, server_name: str, tool_name: str, arguments: dict
+    ) -> str:
+        """Call a tool on an MCP server. Returns the text result.
+
+        Convenience wrapper around get_mcp_tool().call_tool().
+        """
+        client = await self.get_mcp_tool(server_name)
+        return await client.call_tool(tool_name, arguments)
+
+    async def _close_mcp_clients(self) -> None:
+        """Close all open MCP server connections."""
+        for client in self._mcp_clients.values():
+            await client.close()
+        self._mcp_clients.clear()
+
     # --- Outbound: Discovery & Delegation ---
 
     async def discover(
@@ -438,12 +473,29 @@ class MeshAgent:
             result_data = json.loads(result_raw)["params"]
             result = TaskResult(**result_data)
 
-            # Report trust update
+            # Evaluate output quality and report trust update
+            if result.status == TaskStatus.COMPLETED:
+                try:
+                    eval_result = await self._evaluator.evaluate(
+                        task_capability=capability,
+                        input_data=input_data,
+                        output=result.output,
+                    )
+                    quality = eval_result.score
+                    logger.debug(
+                        f"[{self.name}] Eval '{capability}': {quality:.2f} — {eval_result.reasoning}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Evaluation failed: {e}, defaulting quality=0.7")
+                    quality = 0.7
+            else:
+                quality = 0.0
+
             await self._report_trust(
                 agent_id=target.manifest.agent_id,
                 task_id=result.task_id,
                 success=result.status == TaskStatus.COMPLETED,
-                quality=0.8 if result.status == TaskStatus.COMPLETED else 0.2,
+                quality=quality,
             )
 
             return result

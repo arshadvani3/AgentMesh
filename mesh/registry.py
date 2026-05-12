@@ -55,9 +55,12 @@ _active_task_counts: dict[str, int] = {}
 _failure_streaks: dict[str, int] = {}
 _degraded_since: dict[str, datetime] = {}
 _latency_samples: dict[str, deque] = {}  # agent_id -> deque of last 20 elapsed_ms values
+_trust_history: dict[str, list[dict]] = {}  # agent_id -> [{score, timestamp}], last 50
+_total_tasks_completed: int = 0
 CIRCUIT_OPEN_THRESHOLD = 3
 CIRCUIT_COOLDOWN_SECONDS = 60
 LATENCY_WINDOW = 20  # number of samples to keep in rolling average
+TRUST_HISTORY_WINDOW = 50  # trust score events to keep per agent
 
 HEARTBEAT_TIMEOUT = timedelta(seconds=30)
 HEALTH_CHECK_INTERVAL = 10  # seconds
@@ -423,6 +426,55 @@ async def list_memory_sessions() -> dict:
     return {"sessions": sessions, "count": len(sessions)}
 
 
+@app.get("/agents/{agent_id}/trust_history")
+async def get_trust_history(agent_id: str) -> dict:
+    """Return the trust score history for a specific agent.
+
+    Useful for rendering sparklines in the dashboard.
+
+    Args:
+        agent_id: The agent whose history to fetch.
+
+    Returns:
+        Dict with agent_id and list of {score, timestamp} entries.
+    """
+    db = await get_db()
+    if not await db.get_agent(agent_id):
+        raise HTTPException(404, f"Agent {agent_id} not found")
+    history = _trust_history.get(agent_id, [])
+    return {"agent_id": agent_id, "history": history}
+
+
+@app.get("/stats")
+async def get_mesh_stats() -> dict:
+    """Return aggregate mesh statistics for the dashboard header.
+
+    Returns:
+        Dict with total_tasks, avg_trust, active_sessions, agents_by_status.
+    """
+    db = await get_db()
+    agents = await db.list_agents()
+    memory = get_memory()
+    sessions = await memory.list_sessions()
+
+    by_status: dict[str, int] = {}
+    trust_sum = 0.0
+    for rec in agents:
+        by_status[rec.status] = by_status.get(rec.status, 0) + 1
+        trust_sum += rec.trust_score
+
+    avg_trust = round(trust_sum / len(agents), 4) if agents else 0.0
+
+    return {
+        "total_agents": len(agents),
+        "agents_by_status": by_status,
+        "avg_trust": avg_trust,
+        "total_tasks_completed": _total_tasks_completed,
+        "active_sessions": len(sessions),
+        "active_task_counts": dict(_active_task_counts),
+    }
+
+
 async def _broadcast_trace(event: TraceEvent):
     """Push a trace event to all connected dashboard WebSocket clients.
 
@@ -499,6 +551,21 @@ async def update_trust(agent_id: str, success: bool, quality: float = 0.5, _: st
             await db.update_heartbeat(agent_id, "healthy")
             del _degraded_since[agent_id]
             logger.info(f"Circuit closed for {agent_id} after successful task")
+
+    # Record trust history for dashboard sparklines
+    if agent_id not in _trust_history:
+        _trust_history[agent_id] = []
+    _trust_history[agent_id].append({
+        "score": round(new_trust, 4),
+        "timestamp": datetime.utcnow().isoformat(),
+    })
+    if len(_trust_history[agent_id]) > TRUST_HISTORY_WINDOW:
+        _trust_history[agent_id] = _trust_history[agent_id][-TRUST_HISTORY_WINDOW:]
+
+    # Increment global task counter
+    global _total_tasks_completed
+    if success:
+        _total_tasks_completed += 1
 
     logger.debug(f"Trust update for {agent_id}: {expected:.3f} -> {new_trust:.3f}")
     return {"agent_id": agent_id, "trust_score": new_trust}
