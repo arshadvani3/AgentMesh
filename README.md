@@ -2,12 +2,22 @@
 
 **A peer-to-peer protocol for AI agent discovery, negotiation, and reputation.**
 
-Agents register capabilities, discover each other semantically at runtime, negotiate task contracts over WebSocket, and earn trust scores that influence future routing — all without a central orchestrator.
-
 [![CI](https://github.com/arshadvani3/AgentMesh/actions/workflows/ci.yml/badge.svg)](https://github.com/arshadvani3/AgentMesh/actions)
 [![PyPI](https://img.shields.io/pypi/v/agentmesh-proto.svg)](https://pypi.org/project/agentmesh-proto/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+---
+
+## What AgentMesh Is
+
+AgentMesh is a **framework for connecting AI agents at runtime** — not a specific pipeline or LLM tool.
+
+It has two parts:
+
+**The core framework** (`mesh/` + `sdk/`) — a registry, a router, and a base class. Agents register their capabilities, discover each other via semantic search, negotiate tasks over WebSocket, and earn trust scores that influence future routing. The framework has no opinion about what your agents do or which LLM they use.
+
+**Bundled example agents** (`agents/`) — five agents (research, data analysis, code generation, report writing, web search) built with Groq + LangChain to demonstrate a complete working mesh. These are demos. You don't need them to use AgentMesh, and you don't need Groq or LangChain to write your own agents.
 
 ---
 
@@ -24,42 +34,6 @@ AgentMesh treats agents like services on a network:
 - Quality is **measured, not assumed** — an OutputEvaluator scores every result and feeds real scores back into trust
 
 The registry is a phone book, not an orchestrator. Agents talk directly to each other.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        AgentMesh Runtime                        │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              Mesh Registry (port 8080)                   │   │
-│  │   FastAPI · PostgreSQL · Semantic Search · Traces        │   │
-│  │   Registration · Discovery · Trust · Memory · Stats      │   │
-│  └──────────────────────────┬──────────────────────────────┘   │
-│                             │ POST /discover                    │
-│          ┌──────────────────┼──────────────────┐               │
-│          ▼                  ▼                  ▼               │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │  Research   │  │    Data      │  │    Code      │  ···     │
-│  │   Agent     │  │   Agent      │  │   Agent      │          │
-│  │   :9001     │  │   :9002      │  │   :9003      │          │
-│  └──────┬──────┘  └──────┬───────┘  └──────┬───────┘          │
-│         │                │                 │                   │
-│  ┌─────────────┐  ┌──────────────┐         │                  │
-│  │   Writer    │  │  WebSearch   │         │                  │
-│  │   Agent     │  │   Agent      │         │                  │
-│  │   :9004     │  │  :9005 (MCP) │         │                  │
-│  └─────────────┘  └──────────────┘         │                  │
-│         │  WebSocket task.request ──────────┘                  │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │     React Dashboard (port 5173)                         │   │
-│  │     Mesh Graph · Trace Timeline · Memory Inspector      │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
 
 ---
 
@@ -133,61 +107,15 @@ Scores are bounded to `[0.0, 1.0]`. After **3 consecutive failures**, the circui
 - `analyze_csv` — cross-checks reported numbers against actual pandas/numpy computed stats (±10% tolerance)
 - `fetch_code` — checks subprocess exit code (`0` = correct, syntax error = `0.0`)
 - `web_search` — checks non-empty result content
-- `write_report` — LLM-as-judge via Groq (generic rubric, returns `0.5` if API key unavailable)
+- `write_report` — LLM-as-judge via Groq (generic rubric, returns `0.5` if API unavailable)
 
 This closes the feedback loop: better agents accumulate trust over time, poor ones decline and get routed around.
 
 ---
 
-## Quick Start
+## Building Your Own Agent
 
-**Requirements:** Python 3.11+, a [Groq API key](https://console.groq.com) (free tier works)
-
-```bash
-# 1. Install from PyPI
-pip install "agentmesh-proto[all]"
-
-# Or clone for local development
-git clone https://github.com/arshadvani3/AgentMesh
-cd AgentMesh
-pip install -e ".[all,dev]"
-
-# 2. Configure
-cp .env.example .env
-# Set GROQ_API_KEY=gsk_...
-
-# 4. Run
-python3 demo.py
-```
-
-**Install options:**
-
-| Command | What you get |
-|---|---|
-| `pip install agentmesh-proto` | Registry + SDK only — no LLM deps |
-| `pip install "agentmesh-proto[agents]"` | + LangChain, LangGraph, Groq, Pandas |
-| `pip install "agentmesh-proto[database]"` | + asyncpg for PostgreSQL |
-| `pip install "agentmesh-proto[cache]"` | + Redis for session memory |
-| `pip install "agentmesh-proto[mcp]"` | + MCP tool client |
-| `pip install "agentmesh-proto[all]"` | Everything above |
-
-The demo starts the registry, launches 4 agents, submits a research task against the included startup funding dataset, and prints the final report. Everything — including semantic search model loading — is automatic.
-
-**Custom query:**
-```bash
-python3 demo.py --query "Compare vector databases for RAG: Pinecone vs Weaviate vs Chroma"
-```
-
-**Custom dataset:**
-```bash
-python3 demo.py --csv-path /path/to/your/data.csv --query "Analyze the trends in this dataset"
-```
-
----
-
-## Building an Agent
-
-Subclass `MeshAgent`, decorate methods with `@capability`, call `start()`.
+Subclass `MeshAgent`, decorate methods with `@capability`, call `start()`. No LLM required — your agent can do anything.
 
 ```python
 from sdk.agent import MeshAgent, capability
@@ -210,7 +138,7 @@ class TranslationAgent(MeshAgent):
         cost_per_call_usd=0.001,
     )
     async def translate_text(self, input_data: dict) -> dict:
-        # your model / API call here
+        # call any model, API, or database here
         return {"translated": "...", "detected_source": "en"}
 
 
@@ -227,10 +155,9 @@ async def main():
 asyncio.run(main())
 ```
 
-Once running, any other mesh agent can find and use it:
+Once running, any other agent on the mesh can find and use it:
 
 ```python
-# From any MeshAgent subclass:
 agents = await self.discover(description="translate text between languages")
 result = await self.delegate("translate_text", {
     "text": "Hello, world!",
@@ -239,9 +166,11 @@ result = await self.delegate("translate_text", {
 print(result.output["translated"])  # "¡Hola, mundo!"
 ```
 
+More examples in [`examples/`](examples/) — including a minimal 15-line hello agent and a 2-agent pipeline without LangGraph.
+
 ### Using MCP Tools
 
-Agents can call MCP tools directly via the built-in client. Configure servers in `~/.agentmesh/mcp_servers.json`:
+Agents can call MCP tools directly. Configure servers in `~/.agentmesh/mcp_servers.json`:
 
 ```json
 {
@@ -256,14 +185,55 @@ Agents can call MCP tools directly via the built-in client. Configure servers in
 Then call from any agent:
 
 ```python
-result = await self.call_mcp_tool(
-    "brave-search",
-    "brave_web_search",
-    {"query": input_data["query"]}
-)
+result = await self.call_mcp_tool("brave-search", "brave_web_search", {"query": "..."})
 ```
 
-A mock fallback activates automatically when the server isn't configured — so the mesh runs and tests pass without a Brave API key.
+A mock fallback activates automatically when the server isn't configured.
+
+---
+
+## Try the Demo
+
+The bundled demo starts the registry and launches 5 example agents (Research, Data, Code, Writer, WebSearch) backed by Groq Llama 3.3 70B. It runs a full research pipeline against the included startup funding dataset and prints the final report.
+
+**Requirements:** Python 3.11+, a free [Groq API key](https://console.groq.com)
+
+```bash
+# Clone and install (includes example agent deps)
+git clone https://github.com/arshadvani3/AgentMesh
+cd AgentMesh
+pip install -e ".[all,dev]"
+
+# Configure
+cp .env.example .env
+# Set GROQ_API_KEY=gsk_...
+
+# Run
+python3 demo.py
+```
+
+**Custom query:**
+```bash
+python3 demo.py --query "Compare vector databases for RAG: Pinecone vs Weaviate vs Chroma"
+```
+
+**Custom dataset:**
+```bash
+python3 demo.py --csv-path /path/to/your/data.csv --query "Analyze the trends in this dataset"
+```
+
+**Install options:**
+
+| Command | What you get |
+|---|---|
+| `pip install agentmesh-proto` | Core framework only — registry + SDK, no LLM deps |
+| `pip install "agentmesh-proto[agents]"` | + LangChain, LangGraph, Groq, Pandas (needed for the bundled example agents) |
+| `pip install "agentmesh-proto[database]"` | + asyncpg for PostgreSQL |
+| `pip install "agentmesh-proto[cache]"` | + Redis for session memory |
+| `pip install "agentmesh-proto[mcp]"` | + MCP tool client |
+| `pip install "agentmesh-proto[all]"` | Everything above |
+
+> **Note:** `[agents]` is only needed to run the bundled example agents. Your own agents only need the core install.
 
 ---
 
@@ -295,7 +265,6 @@ Each agent is independent. Add or remove reviewers by registering/deregistering.
 Multiple LLM backends registered with different cost profiles:
 
 ```python
-# Find the best agent within a $0.005/call budget
 agents = await self.discover(
     description="generate structured JSON from unstructured text",
     max_cost_usd=0.005,
@@ -335,12 +304,51 @@ An orchestrator composes them into workflows at runtime, discovering what's avai
 
 ---
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│              AgentMesh Core Framework               │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐  │
+│  │           Registry  (port 8080)               │  │
+│  │  Registration · Discovery · Trust · Traces    │  │
+│  │  Semantic routing · Circuit breaker · Memory  │  │
+│  └────────────────────────┬──────────────────────┘  │
+│                           │  REST + WebSocket        │
+│  ┌────────────────────────▼──────────────────────┐  │
+│  │              MeshAgent SDK                    │  │
+│  │   register · heartbeat · discover · delegate  │  │
+│  │   negotiate · trust report · MCP tools        │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                     │
+│  ┌───────────────────────────────────────────────┐  │
+│  │   React Dashboard  (port 5173)                │  │
+│  │   Mesh Graph · Trace Timeline · Memory Panel  │  │
+│  └───────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│      Bundled Example Agents  (demo only)            │
+│  Any agent you write sits here too — using any      │
+│  LLM, database, API, or no AI at all.               │
+│                                                     │
+│  ResearchAgent :9001  ── LangGraph orchestrator     │
+│  DataAgent     :9002  ── pandas/numpy + Groq        │
+│  CodeAgent     :9003  ── code gen + subprocess      │
+│  WriterAgent   :9004  ── report synthesis + Groq    │
+│  WebSearchAgent:9005  ── brave-search MCP           │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Project Structure
 
 ```
 agentmesh/
 │
-├── mesh/
+├── mesh/                  # Core framework — registry, router, protocol
 │   ├── models.py          # Pydantic schemas — protocol source of truth
 │   ├── registry.py        # FastAPI service: register, discover, trust, traces, memory, stats
 │   ├── router.py          # 4-factor semantic routing (match/trust/load/cost)
@@ -351,12 +359,13 @@ agentmesh/
 │   ├── cli.py             # Click CLI
 │   └── migrations/        # SQL migrations 001–004
 │
-├── sdk/
+├── sdk/                   # Core framework — agent base class
 │   └── agent.py           # MeshAgent base class + @capability decorator
 │                          # Handles: registration, heartbeat, WebSocket task server,
 │                          # discover(), delegate(), counter-proposal retry, MCP tools
 │
-├── agents/
+├── agents/                # Example agents — bundled demo implementations
+│   │                      # Not part of the core framework. Replace with your own.
 │   ├── research_agent.py  # LangGraph orchestrator: plan→discover→delegate→synthesize
 │   ├── data_agent.py      # Real pandas/numpy CSV computation; LLM narrates, doesn't invent
 │   ├── code_agent.py      # Code generation via Groq + optional subprocess execution
@@ -375,8 +384,8 @@ agentmesh/
 │           ├── useAgents.ts           # Registry polling hook
 │           └── useStats.ts            # Aggregate mesh stats polling
 │
-├── examples/
-│   ├── hello_agent.py          # Minimal 15-line agent — register and respond
+├── examples/              # Minimal standalone examples to get started
+│   ├── hello_agent.py          # 15-line agent — register and respond
 │   ├── translation_agent.py    # Full translation agent (runnable standalone)
 │   └── two_agent_pipeline.py   # 2-agent mini-mesh without LangGraph
 │
@@ -399,7 +408,7 @@ agentmesh/
 ├── data/
 │   └── startups.csv    # 100-row demo dataset (company/sector/funding/year/country/stage)
 │
-├── demo.py         # One-command demo: registry + 4 agents + research task + Rich UI
+├── demo.py         # One-command demo: registry + 5 example agents + research task
 ├── .env.example    # Environment variable template
 └── pyproject.toml  # Package metadata + dependencies
 ```
@@ -458,7 +467,7 @@ pytest tests/ -v
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GROQ_API_KEY` | Yes | — | Groq API key ([get free at console.groq.com](https://console.groq.com)) |
+| `GROQ_API_KEY` | Demo agents only | — | Groq API key ([free at console.groq.com](https://console.groq.com)) — not needed for your own agents |
 | `REGISTRY_URL` | No | `http://localhost:8080` | Registry base URL for agents |
 | `REGISTRY_PORT` | No | `8080` | Port for the registry server |
 | `DATABASE_URL` | No | in-memory | PostgreSQL connection string |
@@ -471,18 +480,26 @@ pytest tests/ -v
 
 ## Tech Stack
 
+**Core framework** — no LLM dependency:
+
 | Layer | Technology |
 |---|---|
 | Registry API | FastAPI + asyncpg + PostgreSQL |
-| LLM | Groq API — Llama 3.3 70B via langchain-groq |
-| Orchestration | LangGraph StateGraph |
-| Semantic Search | sentence-transformers (all-MiniLM-L6-v2) |
+| Semantic Routing | sentence-transformers (all-MiniLM-L6-v2) |
 | Agent Transport | WebSocket (websockets) |
 | MCP Tools | mcp>=1.0.0 — stdio subprocess client |
 | Session Memory | Redis (in-memory fallback) |
 | Dashboard | React 18 + TypeScript + Vite + Tailwind + Recharts |
 | Testing | pytest + pytest-asyncio |
 | CLI | Click |
+
+**Bundled example agents only** — swap these for whatever your agents use:
+
+| Layer | Technology |
+|---|---|
+| LLM | Groq API — Llama 3.3 70B via langchain-groq |
+| Orchestration | LangGraph StateGraph (ResearchAgent only) |
+| Data Analysis | pandas + numpy (DataAgent only) |
 
 ---
 
