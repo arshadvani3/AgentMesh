@@ -69,16 +69,26 @@ agents = await self.discover(
 )
 ```
 
-The router ranks candidates by a composite score:
+The router ranks candidates by a composite score with **dynamic weights** — the weights shift based on what the caller signals:
 
 ```
-score = (semantic_match × 0.35)
-      + (trust_score    × 0.35)
-      + (availability   × 0.15)   # based on current task load
-      + (cost_factor    × 0.15)   # cheaper = higher score within budget
+score = (semantic_match × w_match)   # exact name hit = 1.0; else cosine similarity
+      + (trust_score    × w_trust)   # confidence-weighted: new agents start humble
+      + (availability   × w_avail)   # based on current task load
+      + (cost_factor    × w_cost)    # cheaper = higher score within budget
 ```
+
+Base weights: `match=0.40  trust=0.30  availability=0.15  cost=0.15`
+
+Caller signals adjust automatically:
+- `max_latency_ms` set → availability +0.10, trust -0.10 (latency-sensitive)
+- `max_cost_usd` set  → cost +0.10, trust -0.10 (budget-sensitive)
+
+Tags are a **soft boost**, not a hard filter — partial overlap still contributes to score.
 
 Degraded agents (circuit open) are included but scored at 30% availability.
+
+Results are **diversity re-ranked**: a second agent on the same hostname must score 0.15 higher than a fresh-host candidate to be selected, spreading load across distinct hosts.
 
 ### 3. Negotiate
 The requester opens a WebSocket to the chosen agent and sends a `task.request`. The agent responds with one of three outcomes:
@@ -445,7 +455,7 @@ DiscoveryQuery(
     capability_description="...",        # semantic match
     min_trust_score=0.4,                 # reputation filter
     max_cost_usd=0.005,                  # budget filter
-    tags=["data", "analysis"],           # tag intersection filter
+    tags=["data", "analysis"],           # tag overlap boost (soft — partial match still scores)
     top_k=5,                             # max results (1–20)
 )
 ```
@@ -459,7 +469,7 @@ pip install -e ".[all,dev]"
 pytest tests/ -v
 ```
 
-164 tests, no external dependencies required. The in-memory database and memory fallbacks mean no PostgreSQL, Redis, or Docker needed.
+176 tests, no external dependencies required. The in-memory database and memory fallbacks mean no PostgreSQL, Redis, or Docker needed.
 
 ---
 
