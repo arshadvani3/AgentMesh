@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mesh.models import AgentManifest, AgentRecord, CapabilitySchema, DiscoveryQuery
+from mesh.models import AgentManifest, AgentRecord, AgentStatus, CapabilitySchema, DiscoveryQuery
 from mesh.router import TaskRouter
 
 # ---------------------------------------------------------------------------
@@ -39,6 +39,25 @@ def _make_record(
         tags=tags or [],
     )
     return AgentRecord(manifest=manifest, trust_score=trust_score)
+
+
+def _make_record_with_endpoint(
+    agent_id: str,
+    caps: list[tuple[str, str]],
+    endpoint: str,
+    trust_score: float = 0.5,
+    tasks_completed: int = 20,
+) -> AgentRecord:
+    capabilities = [CapabilitySchema(name=n, description=d) for n, d in caps]
+    manifest = AgentManifest(
+        agent_id=agent_id,
+        name=agent_id,
+        endpoint=endpoint,
+        capabilities=capabilities,
+    )
+    record = AgentRecord(manifest=manifest, trust_score=trust_score)
+    record.tasks_completed = tasks_completed
+    return record
 
 
 def _make_record_with_cost(
@@ -172,26 +191,36 @@ class TestTaskRouter:
         assert len(results) == 0
 
     async def test_tag_filter(self):
-        """Tags filter excludes agents without matching tags."""
+        """Agent with matching tags ranks above one with no overlap (soft scoring).
+
+        Uses a semantic query (not exact name) so the tag_overlap boost affects match_score.
+        Exact-name matches always get match_score=1.0, making tag overlap irrelevant there.
+        """
         router = TaskRouter()
         tagged = _make_record(
             "agent-tagged",
-            [("analyze_csv", "Analyze data")],
+            [("analyze_csv", "Statistical analysis of tabular data")],
             tags=["data", "csv"],
         )
-        untagged = _make_record(
-            "agent-untagged",
-            [("analyze_csv", "Analyze data")],
+        tagged.tasks_completed = 20
+        no_overlap = _make_record(
+            "agent-no-overlap",
+            [("analyze_csv", "Statistical analysis of tabular data")],
             tags=["writing"],
         )
+        no_overlap.tasks_completed = 20
         await router.index_agent(tagged)
-        await router.index_agent(untagged)
+        await router.index_agent(no_overlap)
 
-        query = DiscoveryQuery(capability_name="analyze_csv", tags=["data"])
-        results = await router.match(query, [tagged, untagged])
-        ids = [r.manifest.agent_id for r in results]
-        assert "agent-tagged" in ids
-        assert "agent-untagged" not in ids
+        # Semantic query + tags — agent with matching tags should rank first
+        query = DiscoveryQuery(
+            capability_description="analyze CSV spreadsheet data",
+            tags=["data"],
+            top_k=5,
+        )
+        results = await router.match(query, [tagged, no_overlap])
+        assert len(results) >= 1
+        assert results[0].manifest.agent_id == "agent-tagged"
 
     async def test_top_k_limit(self):
         """Results are capped at top_k."""
@@ -289,3 +318,187 @@ class TestCostAwareRouting:
         results = await router.match(query, [cheap, pricey])
         assert len(results) == 2
         assert results[0].manifest.agent_id == "agent-low-cost"
+
+
+@pytest.mark.asyncio
+class TestConfidenceWeightedTrust:
+    async def test_new_agent_gets_cold_start_floor(self):
+        """Agent with 0 tasks gets 30% of face-value trust."""
+        router = TaskRouter()
+        record = _make_record("agent-cold", [("analyze_csv", "x")], trust_score=1.0)
+        record.tasks_completed = 0
+        assert abs(router._effective_trust(record) - 0.3) < 1e-9
+
+    async def test_ten_tasks_gives_full_trust(self):
+        """Agent with 10 completed tasks gets full face-value trust."""
+        router = TaskRouter()
+        record = _make_record("agent-warm", [("analyze_csv", "x")], trust_score=0.8)
+        record.tasks_completed = 10
+        assert abs(router._effective_trust(record) - 0.8) < 1e-9
+
+    async def test_proven_agent_beats_new_same_raw_trust(self):
+        """Proven agent (50 tasks) ranks above brand-new agent with identical trust."""
+        router = TaskRouter()
+        proven = _make_record("agent-proven", [("analyze_csv", "Analyze CSV data")], trust_score=0.8)
+        proven.tasks_completed = 50
+        new_agent = _make_record("agent-new", [("analyze_csv", "Analyze CSV data")], trust_score=0.8)
+        new_agent.tasks_completed = 0
+
+        await router.index_agent(proven)
+        await router.index_agent(new_agent)
+
+        query = DiscoveryQuery(capability_name="analyze_csv", top_k=5)
+        results = await router.match(query, [proven, new_agent])
+        assert results[0].manifest.agent_id == "agent-proven"
+
+    async def test_partial_confidence_is_between_floor_and_full(self):
+        """Agent with 5 tasks has effective trust between 30% and 100% of face-value."""
+        router = TaskRouter()
+        record = _make_record("agent-mid", [("analyze_csv", "x")], trust_score=1.0)
+        record.tasks_completed = 5
+        effective = router._effective_trust(record)
+        assert 0.3 < effective < 1.0
+
+
+@pytest.mark.asyncio
+class TestDynamicWeights:
+    async def test_latency_sensitive_prefers_idle_agent(self):
+        """With max_latency_ms set, an idle low-trust agent beats a loaded high-trust agent."""
+        router = TaskRouter()
+        loaded = _make_record("agent-loaded", [("analyze_csv", "Analyze CSV data")], trust_score=0.9)
+        loaded.tasks_completed = 20
+        idle = _make_record("agent-idle", [("analyze_csv", "Analyze CSV data")], trust_score=0.6)
+        idle.tasks_completed = 20
+
+        await router.index_agent(loaded)
+        await router.index_agent(idle)
+
+        task_counts = {"agent-loaded": 3, "agent-idle": 0}  # loaded is at capacity
+        query = DiscoveryQuery(capability_name="analyze_csv", max_latency_ms=5000, top_k=5)
+        results = await router.match(query, [loaded, idle], task_counts=task_counts)
+        assert results[0].manifest.agent_id == "agent-idle"
+
+    async def test_cost_sensitive_prefers_cheap_agent(self):
+        """With max_cost_usd set, cost weight increases — cheap agent beats pricey one."""
+        router = TaskRouter()
+        cheap = _make_record_with_cost(
+            "agent-cheap-dyn", [("analyze_csv", "Analyze CSV data", 0.001)], trust_score=0.5
+        )
+        pricey = _make_record_with_cost(
+            "agent-pricey-dyn", [("analyze_csv", "Analyze CSV data", 0.008)], trust_score=0.5
+        )
+        cheap.tasks_completed = 20
+        pricey.tasks_completed = 20
+
+        await router.index_agent(cheap)
+        await router.index_agent(pricey)
+
+        query = DiscoveryQuery(capability_name="analyze_csv", max_cost_usd=0.01, top_k=5)
+        results = await router.match(query, [cheap, pricey])
+        assert results[0].manifest.agent_id == "agent-cheap-dyn"
+
+    async def test_weights_sum_to_one_no_signals(self):
+        """Base weights sum to 1.0 when no latency or cost signals are set."""
+        query = DiscoveryQuery(capability_name="analyze_csv")
+        w_match, w_trust, w_avail, w_cost = TaskRouter._dynamic_weights(query)
+        assert abs(w_match + w_trust + w_avail + w_cost - 1.0) < 1e-9
+
+    async def test_weights_sum_to_one_with_signals(self):
+        """Weights still sum to 1.0 when both latency and cost signals are present."""
+        query = DiscoveryQuery(capability_name="analyze_csv", max_latency_ms=1000, max_cost_usd=0.005)
+        w_match, w_trust, w_avail, w_cost = TaskRouter._dynamic_weights(query)
+        assert abs(w_match + w_trust + w_avail + w_cost - 1.0) < 1e-9
+
+
+@pytest.mark.asyncio
+class TestTagSoftScoring:
+    async def test_tag_overlap_boosts_rank(self):
+        """Agent with more tag overlap ranks above one with less, same trust and capability."""
+        router = TaskRouter()
+        good_tags = _make_record(
+            "agent-good-tags",
+            [("analyze_csv", "Analyze CSV data")],
+            trust_score=0.5,
+            tags=["data", "csv", "analysis"],
+        )
+        good_tags.tasks_completed = 20
+        weak_tags = _make_record(
+            "agent-weak-tags",
+            [("analyze_csv", "Analyze CSV data")],
+            trust_score=0.5,
+            tags=["writing"],
+        )
+        weak_tags.tasks_completed = 20
+
+        await router.index_agent(good_tags)
+        await router.index_agent(weak_tags)
+
+        query = DiscoveryQuery(capability_name="analyze_csv", tags=["data", "csv"], top_k=5)
+        results = await router.match(query, [good_tags, weak_tags])
+        assert results[0].manifest.agent_id == "agent-good-tags"
+
+    async def test_partial_tag_overlap_still_included(self):
+        """Agent with partial tag match still appears — tags are no longer a hard filter."""
+        router = TaskRouter()
+        partial = _make_record(
+            "agent-partial",
+            [("analyze_csv", "Analyze CSV data")],
+            trust_score=0.5,
+            tags=["data"],
+        )
+        partial.tasks_completed = 20
+        await router.index_agent(partial)
+
+        query = DiscoveryQuery(capability_name="analyze_csv", tags=["data", "csv"], top_k=5)
+        results = await router.match(query, [partial])
+        assert len(results) == 1
+        assert results[0].manifest.agent_id == "agent-partial"
+
+
+@pytest.mark.asyncio
+class TestDiversityReranking:
+    async def test_prefers_different_hosts(self):
+        """When top candidates share a host, a lower-scored agent on a fresh host is preferred."""
+        router = TaskRouter()
+        host_a_1 = _make_record_with_endpoint(
+            "agent-a1", [("analyze_csv", "Analyze CSV data")],
+            endpoint="ws://host-a:9001", trust_score=0.9,
+        )
+        host_a_2 = _make_record_with_endpoint(
+            "agent-a2", [("analyze_csv", "Analyze CSV data")],
+            endpoint="ws://host-a:9002", trust_score=0.85,
+        )
+        host_b = _make_record_with_endpoint(
+            "agent-b", [("analyze_csv", "Analyze CSV data")],
+            endpoint="ws://host-b:9001", trust_score=0.7,
+        )
+        await router.index_agent(host_a_1)
+        await router.index_agent(host_a_2)
+        await router.index_agent(host_b)
+
+        query = DiscoveryQuery(capability_name="analyze_csv", top_k=2)
+        results = await router.match(query, [host_a_1, host_a_2, host_b])
+        ids = [r.manifest.agent_id for r in results]
+
+        # First result must be host-a1 (highest score)
+        assert ids[0] == "agent-a1"
+        # Second result must be host-b (diversity penalty knocks host-a2 below host-b)
+        assert ids[1] == "agent-b"
+
+    async def test_same_host_still_selected_if_only_option(self):
+        """If all candidates share a host, they are still returned (diversity is a preference)."""
+        router = TaskRouter()
+        a1 = _make_record_with_endpoint(
+            "agent-same-1", [("analyze_csv", "Analyze CSV data")],
+            endpoint="ws://same-host:9001", trust_score=0.9,
+        )
+        a2 = _make_record_with_endpoint(
+            "agent-same-2", [("analyze_csv", "Analyze CSV data")],
+            endpoint="ws://same-host:9002", trust_score=0.8,
+        )
+        await router.index_agent(a1)
+        await router.index_agent(a2)
+
+        query = DiscoveryQuery(capability_name="analyze_csv", top_k=2)
+        results = await router.match(query, [a1, a2])
+        assert len(results) == 2
