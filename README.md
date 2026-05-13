@@ -5,6 +5,7 @@
 Agents register capabilities, discover each other semantically at runtime, negotiate task contracts over WebSocket, and earn trust scores that influence future routing — all without a central orchestrator.
 
 [![CI](https://github.com/arshadvani3/AgentMesh/actions/workflows/ci.yml/badge.svg)](https://github.com/arshadvani3/AgentMesh/actions)
+[![PyPI](https://img.shields.io/pypi/v/agentmesh.svg)](https://pypi.org/project/agentmesh/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -143,20 +144,32 @@ This closes the feedback loop: better agents accumulate trust over time, poor on
 **Requirements:** Python 3.11+, a [Groq API key](https://console.groq.com) (free tier works)
 
 ```bash
-# 1. Clone
+# 1. Install from PyPI
+pip install "agentmesh[all]"
+
+# Or clone for local development
 git clone https://github.com/arshadvani3/AgentMesh
 cd AgentMesh
+pip install -e ".[all,dev]"
 
-# 2. Install
-pip install -e ".[dev]"
-
-# 3. Configure
+# 2. Configure
 cp .env.example .env
 # Set GROQ_API_KEY=gsk_...
 
 # 4. Run
 python3 demo.py
 ```
+
+**Install options:**
+
+| Command | What you get |
+|---|---|
+| `pip install agentmesh` | Registry + SDK only — no LLM deps |
+| `pip install "agentmesh[agents]"` | + LangChain, LangGraph, Groq, Pandas |
+| `pip install "agentmesh[database]"` | + asyncpg for PostgreSQL |
+| `pip install "agentmesh[cache]"` | + Redis for session memory |
+| `pip install "agentmesh[mcp]"` | + MCP tool client |
+| `pip install "agentmesh[all]"` | Everything above |
 
 The demo starts the registry, launches 4 agents, submits a research task against the included startup funding dataset, and prints the final report. Everything — including semantic search model loading — is automatic.
 
@@ -433,6 +446,7 @@ DiscoveryQuery(
 ## Running Tests
 
 ```bash
+pip install -e ".[all,dev]"
 pytest tests/ -v
 ```
 
