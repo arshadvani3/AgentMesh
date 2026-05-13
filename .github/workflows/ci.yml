@@ -36,7 +36,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[all,dev]"
 
       - name: Run mypy
         run: mypy mesh/ sdk/ agents/ --ignore-missing-imports --no-strict-optional
@@ -54,7 +54,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[all,dev]"
 
       - name: Run tests
         env:

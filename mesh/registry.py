@@ -33,6 +33,7 @@ from .models import (
     DiscoveryQuery,
     DiscoveryResult,
     TraceEvent,
+    TraceEventType,
 )
 from .router import TaskRouter
 
@@ -440,7 +441,7 @@ async def post_trace(body: _TraceRequest) -> dict:
     event = TraceEvent(
         trace_id=str(uuid.uuid4()),
         task_id=body.task_id[:64],
-        event_type=body.event_type,
+        event_type=TraceEventType(body.event_type),
         from_agent=body.from_agent[:128],
         to_agent=body.to_agent[:128],
         payload=body.payload,
