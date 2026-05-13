@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mesh.models import AgentManifest, AgentRecord, AgentStatus, CapabilitySchema, DiscoveryQuery
+from mesh.models import AgentManifest, AgentRecord, CapabilitySchema, DiscoveryQuery
 from mesh.router import TaskRouter
 
 # ---------------------------------------------------------------------------
