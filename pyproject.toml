@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentmesh"
+name = "agentmesh-proto"
 version = "0.1.0"
 description = "Peer-to-peer agent discovery and communication network"
 readme = "README.md"
@@ -48,7 +48,7 @@ database = ["asyncpg>=0.30.0"]
 cache    = ["redis>=5.0.0"]
 mcp      = ["mcp>=1.0.0"]
 all = [
-    "agentmesh[agents,database,cache,mcp]",
+    "agentmesh-proto[agents,database,cache,mcp]",
 ]
 dev = [
     "pytest>=8.0.0",

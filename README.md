@@ -5,7 +5,7 @@
 Agents register capabilities, discover each other semantically at runtime, negotiate task contracts over WebSocket, and earn trust scores that influence future routing — all without a central orchestrator.
 
 [![CI](https://github.com/arshadvani3/AgentMesh/actions/workflows/ci.yml/badge.svg)](https://github.com/arshadvani3/AgentMesh/actions)
-[![PyPI](https://img.shields.io/pypi/v/agentmesh.svg)](https://pypi.org/project/agentmesh/)
+[![PyPI](https://img.shields.io/pypi/v/agentmesh-proto.svg)](https://pypi.org/project/agentmesh-proto/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -145,7 +145,7 @@ This closes the feedback loop: better agents accumulate trust over time, poor on
 
 ```bash
 # 1. Install from PyPI
-pip install "agentmesh[all]"
+pip install "agentmesh-proto[all]"
 
 # Or clone for local development
 git clone https://github.com/arshadvani3/AgentMesh
@@ -164,12 +164,12 @@ python3 demo.py
 
 | Command | What you get |
 |---|---|
-| `pip install agentmesh` | Registry + SDK only — no LLM deps |
-| `pip install "agentmesh[agents]"` | + LangChain, LangGraph, Groq, Pandas |
-| `pip install "agentmesh[database]"` | + asyncpg for PostgreSQL |
-| `pip install "agentmesh[cache]"` | + Redis for session memory |
-| `pip install "agentmesh[mcp]"` | + MCP tool client |
-| `pip install "agentmesh[all]"` | Everything above |
+| `pip install agentmesh-proto` | Registry + SDK only — no LLM deps |
+| `pip install "agentmesh-proto[agents]"` | + LangChain, LangGraph, Groq, Pandas |
+| `pip install "agentmesh-proto[database]"` | + asyncpg for PostgreSQL |
+| `pip install "agentmesh-proto[cache]"` | + Redis for session memory |
+| `pip install "agentmesh-proto[mcp]"` | + MCP tool client |
+| `pip install "agentmesh-proto[all]"` | Everything above |
 
 The demo starts the registry, launches 4 agents, submits a research task against the included startup funding dataset, and prints the final report. Everything — including semantic search model loading — is automatic.
 
