@@ -1,7 +1,5 @@
 # AgentMesh — Technical Benchmark Report
 
-*Generated: 2026-05-15 02:52 UTC*
-
 
 ---
 
@@ -42,7 +40,6 @@ Dynamic caller signals adjust weights: `max_latency_ms` shifts availability from
 | 3 | Resilience Under Failure | **PASS** | Fallback + 60 s auto-recovery | Mesh survives agent kill |
 | 4 | Mesh Overhead | **PASS** | ~0.3–0.5 s routing cost | Mesh is a thin layer |
 | 5 | Routing Intelligence | **PASS** | 5/5 formula checks | Routing is mathematically correct |
-| 6 | Adaptive vs Static Routing | — | not run | — |
 
 ---
 
@@ -196,43 +193,3 @@ Dynamic caller signals adjust weights: `max_latency_ms` shifts availability from
 - Cold-start protection prevents untested agents from winning early routing rounds.
 - Caller signals (`max_latency_ms`, `max_cost_usd`) shift weights in exactly the direction specified — verified to 2 decimal places.
 - Diversity re-ranking ensures the mesh doesn't always pick agents from the same host, even when they rank highest by composite score.
-
----
-
-## Experiment 6 — Adaptive vs Static Routing
-*Not run. Use `python3 -m benchmark.experiments.static_routing`*
-
----
-
-## Reproducibility
-
-All experiments require the mesh to be running locally. Raw JSON results are saved to `benchmark_results/` — re-running any experiment overwrites only that config's file.
-
-```bash
-# Start registry + all 5 agents + dashboard
-./run_dev.sh
-
-# Experiment 1 — model quality across all configs
-python3 -m benchmark.experiments.model_quality
-
-# Experiment 2 — trust convergence (run per config)
-python3 -m benchmark.experiments.trust_convergence --config all_70b
-python3 -m benchmark.experiments.trust_convergence --config mixed
-
-# Experiment 3 — resilience (agents managed automatically)
-python3 -m benchmark.experiments.resilience --config all_70b
-
-# Experiment 4 — mesh overhead
-python3 -m benchmark.experiments.mesh_overhead --config all_70b
-
-# Experiment 5 — routing intelligence (no model config needed)
-python3 -m benchmark.experiments.routing_intelligence
-
-# Experiment 6 — adaptive vs static routing
-python3 -m benchmark.experiments.static_routing
-
-# Regenerate this report
-python3 -m benchmark.report
-```
-
-Results files: `benchmark_results/{experiment}_{config}.json`, `benchmark_results/routing_intelligence.json`, `benchmark_results/static_routing.json`.
