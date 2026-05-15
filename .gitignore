@@ -54,3 +54,10 @@ PHASE10_GUIDE.md
 # Claude Code internal
 .claude/
 CLAUDE.md
+
+# Benchmark internals — results report is committed, raw data and code are not
+benchmark/
+benchmark_results/*.json
+run_dev.sh
+send_task.py
+.dev_logs/
