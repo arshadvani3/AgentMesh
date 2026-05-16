@@ -1,0 +1,39 @@
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.github
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Dashboard build artifacts and deps (not needed in registry image)
+dashboard/node_modules/
+dashboard/dist/
+
+# Dev / personal files
+STUDY_GUIDE.md
+PROJECT_CONTEXT.md
+PHASE10_GUIDE.md
+run_dev.sh
+send_task.py
+.dev_logs/
+.claude/
+
+# Benchmark internals
+benchmark/
+benchmark_results/*.json
+
+# macOS
+.DS_Store

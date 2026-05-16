@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: agentmesh
       POSTGRES_USER: mesh
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meshpass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env}
     ports:
       - "5432:5432"
     volumes:
@@ -24,7 +24,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://mesh:${POSTGRES_PASSWORD:-meshpass}@postgres:5432/agentmesh
+      DATABASE_URL: postgresql://mesh:${POSTGRES_PASSWORD}@postgres:5432/agentmesh
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: INFO
     depends_on:
