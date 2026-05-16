@@ -333,7 +333,7 @@ An orchestrator composes them into workflows at runtime, discovering what's avai
 │  └───────────────────────────────────────────────┘  │
 │                                                     │
 │  ┌───────────────────────────────────────────────┐  │
-│  │   React Dashboard  (port 5173)                │  │
+│  │   React Dashboard  (port 3000)                │  │
 │  │   Mesh Graph · Trace Timeline · Memory Panel  │  │
 │  └───────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
@@ -385,10 +385,12 @@ agentmesh/
 ├── dashboard/             # Vite + React 18 + TypeScript + Tailwind
 │   └── src/
 │       ├── components/
-│       │   ├── MeshGraph.tsx       # Live force-directed agent network graph
-│       │   ├── TraceTimeline.tsx   # Swimlane view of agent interactions
-│       │   ├── AgentCard.tsx       # Per-agent trust history (recharts)
-│       │   └── MemoryPanel.tsx     # Live session state inspector
+│       │   ├── MeshGraph.tsx       # SVG physics graph: nodes, edges, drag-to-pin, agent detail
+│       │   ├── TraceTimeline.tsx   # Swim-lane timeline with scrubber and event log
+│       │   ├── MemoryPanel.tsx     # Live session state inspector with collapsible JSON
+│       │   ├── CommandPalette.tsx  # ⌘K command palette
+│       │   ├── TaskWaterfall.tsx   # Per-task waterfall modal
+│       │   └── JsonTree.tsx        # Syntax-colored collapsible JSON tree
 │       └── hooks/
 │           ├── useDashboardSocket.ts  # Auto-reconnecting WebSocket for live events
 │           ├── useAgents.ts           # Registry polling hook
@@ -499,7 +501,7 @@ pytest tests/ -v
 | Agent Transport | WebSocket (websockets) |
 | MCP Tools | mcp>=1.0.0 — stdio subprocess client |
 | Session Memory | Redis (in-memory fallback) |
-| Dashboard | React 18 + TypeScript + Vite + Tailwind + Recharts |
+| Dashboard | React 18 + TypeScript + Vite + Tailwind (custom SVG physics, no charting lib) |
 | Testing | pytest + pytest-asyncio |
 | CLI | Click |
 
