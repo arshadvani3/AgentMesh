@@ -1,3 +1,104 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --bg-base:   oklch(0.155 0.005 260);
+  --bg-panel:  oklch(0.185 0.005 260);
+  --bg-elev:   oklch(0.215 0.006 260);
+  --bg-hover:  oklch(0.245 0.007 260);
+  --bg-active: oklch(0.28  0.008 260);
+
+  --border-subtle: oklch(0.255 0.006 260);
+  --border:        oklch(0.305 0.007 260);
+  --border-strong: oklch(0.38  0.009 260);
+
+  --fg:           oklch(0.965 0.004 260);
+  --fg-secondary: oklch(0.74  0.008 260);
+  --fg-tertiary:  oklch(0.55  0.009 260);
+  --fg-muted:     oklch(0.42  0.009 260);
+
+  --accent:        oklch(0.72 0.13 245);
+  --accent-soft:   oklch(0.72 0.13 245 / 0.12);
+  --accent-border: oklch(0.72 0.13 245 / 0.4);
+
+  --sig-red:     oklch(0.68 0.18 25);
+  --sig-amber:   oklch(0.8  0.15 75);
+  --sig-green:   oklch(0.74 0.15 150);
+  --sig-blue:    oklch(0.72 0.13 240);
+  --sig-emerald: oklch(0.74 0.14 165);
+  --sig-yellow:  oklch(0.84 0.14 92);
+  --sig-violet:  oklch(0.72 0.13 295);
+
+  --sig-red-soft:     oklch(0.68 0.18 25  / 0.14);
+  --sig-amber-soft:   oklch(0.8  0.15 75  / 0.14);
+  --sig-green-soft:   oklch(0.74 0.15 150 / 0.14);
+  --sig-blue-soft:    oklch(0.72 0.13 240 / 0.14);
+  --sig-emerald-soft: oklch(0.74 0.14 165 / 0.14);
+  --sig-yellow-soft:  oklch(0.84 0.14 92  / 0.14);
+  --sig-violet-soft:  oklch(0.72 0.13 295 / 0.14);
+
+  --font-sans: 'IBM Plex Sans', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --radius:    4px;
+  --radius-lg: 6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: var(--bg-base);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+input {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg-base); }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+.mono { font-family: var(--font-mono); font-feature-settings: 'zero', 'ss02'; }
+
+/* Pulse animation for live dots */
+@keyframes pulse {
+  0%   { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(3); opacity: 0; }
+}
+
+/* Shimmer for executing bars */
+@keyframes chipshine {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
