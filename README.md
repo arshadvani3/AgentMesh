@@ -7,6 +7,8 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+> **See it in action →** [SHOWCASE.md](SHOWCASE.md) — 9-agent incident response demo with screenshots and analysis
+
 ---
 
 ## What AgentMesh Is
