@@ -250,7 +250,7 @@ class DataAgent(MeshAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            model=os.environ.get("DATA_AGENT_MODEL", "llama-3.3-70b-versatile"),
             api_key=os.environ["GROQ_API_KEY"],
             temperature=0.1,
         )

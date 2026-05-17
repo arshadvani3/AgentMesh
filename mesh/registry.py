@@ -226,7 +226,12 @@ async def register_agent(
     if existing and existing.status != AgentStatus.OFFLINE:
         raise HTTPException(409, f"Agent {manifest.agent_id} already registered")
 
-    record = AgentRecord(manifest=manifest)
+    record = AgentRecord(
+        manifest=manifest,
+        trust_score=existing.trust_score if existing else 0.5,
+        tasks_completed=existing.tasks_completed if existing else 0,
+        tasks_failed=existing.tasks_failed if existing else 0,
+    )
     await db.save_agent(record)
 
     # Index capabilities for semantic search
@@ -472,6 +477,17 @@ async def get_session_memory(
     memory = get_memory()
     data = await memory.get_session(session_id)
     return {"session_id": session_id, "keys": list(data.keys()), "data": data}
+
+
+@app.delete("/memory/{session_id}")
+async def clear_session_memory(
+    session_id: str,
+    _caller: str = Depends(_verify_token),
+) -> dict:
+    """Delete all memory keys for a workflow session."""
+    memory = get_memory()
+    await memory.clear(session_id)
+    return {"session_id": session_id, "cleared": True}
 
 
 @app.get("/memory")

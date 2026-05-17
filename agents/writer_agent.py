@@ -30,7 +30,7 @@ class WriterAgent(MeshAgent):
         """Initialize WriterAgent with a Groq LLM backend."""
         super().__init__(**kwargs)
         self._llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            model=os.environ.get("WRITER_AGENT_MODEL", "llama-3.3-70b-versatile"),
             api_key=os.environ["GROQ_API_KEY"],
             temperature=0.3,
         )

@@ -510,7 +510,20 @@ class MeshAgent:
 
             # Wait for task result
             timeout = deadline_ms / 1000
-            result_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            try:
+                result_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            except (TimeoutError, Exception):
+                await self._emit_trace(
+                    request.task_id, TraceEventType.FAILED,
+                    target.manifest.agent_id, {"error": "timeout"},
+                )
+                await self._report_trust(
+                    agent_id=target.manifest.agent_id,
+                    task_id=request.task_id,
+                    success=False,
+                    quality=0.0,
+                )
+                raise
             result_data = json.loads(result_raw)["params"]
             result = TaskResult(**result_data)
 
