@@ -531,6 +531,26 @@ pytest tests/ -v
 
 ---
 
+## Known Limitations & Future Work
+
+These are trade-offs I made consciously, not gaps I missed. Each one is solvable — here's the current state and the direction I'd take it.
+
+**No task idempotency.** If a task request is delivered twice (network retry, duplicate send), the agent executes it twice. Fixing this requires a task ID dedup store at the agent level — a sliding window of recently seen task IDs checked before execution. Straightforward to add; intentionally deferred to keep the protocol simple at this stage.
+
+**No end-to-end deadline propagation.** In a multi-hop chain (A → B → C), each delegation hop gets a fresh `deadline_ms`. If B takes 15s to process, C has no awareness that only 15s of A's original 30s remains. The fix is propagating `absolute_deadline_utc` alongside `deadline_ms` so every hop in the chain reasons about the same wall-clock cutoff.
+
+**Trust updates are not atomic under horizontal scale.** The current in-memory lock on trust updates is per-process — correct for a single registry instance, but breaks if you run multiple registry replicas. The fix is moving trust state to PostgreSQL with a `SELECT ... FOR UPDATE` or a Redis atomic increment, turning it into a proper distributed write.
+
+**No graceful shutdown.** When an agent calls `stop()`, it deregisters immediately. Tasks in-flight are orphaned — the caller times out. A proper drain sequence would: (1) stop accepting new task requests, (2) wait for in-flight tasks to complete, (3) then deregister. This is the standard "drain before kill" pattern, applicable here directly.
+
+**Semantic match threshold is hard-coded at 0.3.** Agents with low cosine similarity to a query are excluded from routing regardless of their trust or availability. 0.3 was chosen empirically for the current capability corpus — but different capability types (narrow technical vs. broad general) would want different thresholds. The fix is making this a per-capability or per-query parameter.
+
+**No Prometheus metrics or structured logging.** The `/stats` endpoint gives aggregate counts, but there's no way to alert on "too many DEGRADED agents" or "task queue depth growing." A production deployment would want Prometheus counters/histograms on routing decisions, trust updates, and circuit breaker state changes, plus structured JSON logs for ingestion into Datadog or ELK.
+
+**Trust adversarial behaviour is unsolved.** The current EMA trust model assumes agents report outcomes honestly. A coalition of agents that artificially boosts each other's trust scores, or a single agent sandbagging tasks to stay under the circuit breaker threshold, would game the system. Solving this properly requires Byzantine-fault-tolerant reputation — a known hard problem I've scoped as future research rather than v1 scope.
+
+---
+
 ## License
 
 MIT — [Arsh Advani](https://github.com/arshadvani3)
