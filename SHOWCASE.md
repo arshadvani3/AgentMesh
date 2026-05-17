@@ -171,6 +171,8 @@ The model mix was **automatically allocated by the routing formula** — nobody 
 
 ## Try It
 
+The incident demo above was a recorded showcase. To run the mesh yourself, use the 5-agent research pipeline — it only needs Python and a free Groq API key, nothing else.
+
 ```bash
 # 1. Clone and install
 git clone https://github.com/arshadvani3/AgentMesh
@@ -178,26 +180,11 @@ cd AgentMesh
 pip install -e ".[all,dev]"
 cp .env.example .env  # add your GROQ_API_KEY
 
-# 2. Start the registry
-python3 -m uvicorn mesh.registry:app --port 8080
-
-# 3. Start the dashboard (separate tab)
-cd dashboard && npm install && npm run dev  # http://localhost:3000
-
-# 4. Run the 9-agent incident demo (separate tab)
-ollama serve  # needs llama3.2:1b: ollama pull llama3.2:1b
-source .env && python3 demo_incident.py
-
-# try the high error rate scenario too:
-python3 demo_incident.py --incident-type high_error_rate
+# 2. Run the demo — starts registry + 5 agents automatically
+source .env && python3 demo.py
 ```
 
-**Requirements:** Python 3.11+, a free [Groq API key](https://console.groq.com), [Ollama](https://ollama.com) for local agents.
-
-For the original research pipeline demo (5 agents, startup funding analysis):
-```bash
-python3 demo.py
-```
+**Requirements:** Python 3.11+, a free [Groq API key](https://console.groq.com). No Ollama, no Docker, no Node.js.
 
 ---
 
