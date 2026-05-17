@@ -223,6 +223,9 @@ The Python SDK is complete. A production mesh needs agents written in any langua
 ### Exploration vs Exploitation
 The current trust formula always routes to the proven winner. A production mesh needs occasional exploration — route 10% of tasks to lower-trust agents so new entrants can prove themselves without waiting for the incumbent to fail. Standard multi-armed bandit problem, directly applicable to the routing layer.
 
+### Routing Policies Per Capability
+Today the routing formula uses fixed weights — trust, cost, availability, and semantic match all weighted the same way for every task. The next step is letting teams declare a routing policy per capability: `quality` (weight trust heavily, ignore cost), `cost` (cheapest agent that meets a trust floor), or `balanced` (current default). A latency-sensitive capability like `notify_slack` should optimize differently than a high-stakes one like `write_postmortem`. The weights are already in the formula — the missing piece is exposing them as a first-class config teams can set per capability without touching framework code.
+
 ---
 
 ## The Framework
