@@ -31,7 +31,7 @@ A production alert fires. Nine agents across four different LLM backends — Gro
 The live dashboard shows the mesh topology forming:
 
 ![Dashboard — 9 nodes, force graph](docs/screenshots/dashboard-9-nodes.png)
-> *AlertTriage Agent sits at the center as the orchestrator hub. The faded nodes (Log Analysis Pro, Runbook Pro) are registered but idle — they lost the bids and did no work. Active agents have bright edges showing live delegation paths.*
+> *AlertTriage Agent sits at the center as the orchestrator hub. Nine nodes registered, all equal at startup. Log Analysis Pro and Runbook Pro will stay idle after routing — they lose every bid to cheaper equals and never receive a task.*
 
 Every agent starts with a trust score of 0.500 — a clean slate, no advantages:
 
@@ -54,7 +54,7 @@ score = (semantic_match × 0.35) + (trust_score × 0.35)
 Watch the traces stream in on the dashboard as the pipeline runs:
 
 ![Trace Timeline — live during incident 1](docs/screenshots/dashboard-trace-live.png)
-> *Every delegation hop logged in real time. Log analysis and deploy tracking fire in parallel (the two simultaneous request_sent events). Runbook generation fires after, using their output as context. The full 5-agent pipeline is visible as it happens.*
+> *Every delegation hop logged in real time. Log analysis and deploy tracking fire in parallel (the two simultaneous request_sent events). Runbook generation fires after, using their output as context. The full pipeline across the active agents is visible as it happens.*
 
 ---
 
@@ -87,7 +87,7 @@ A full postmortem document is generated as the final pipeline stage:
 Every agent that did real work gets scored by the OutputEvaluator. Quality scores feed back into trust via EMA:
 
 ```
-new_trust = old_trust + 0.1 × (quality_score − expected_quality)
+new_trust = old_trust + 0.1 × (quality_score − old_trust)
 ```
 
 ![Trust divergence — after Incident 1](docs/screenshots/trust-divergence.png)
